@@ -363,6 +363,73 @@ def build_bids_period(*args):
     return build_bm_actions_period('bids', *args)
 
 
+def _query_entsoe_generation(countries, start, end):
+    """Queries ENTSO-E API for day-ahead prices for the requested countries and date range."""
+
+    client = EntsoePandasClient(api_key=ENTSOE_API_KEY)
+
+    data = []
+    for cc in countries:
+        series = client.query_generation(cc, start=start, end=end, psr_type=None)
+        series = series.replace(np.nan, 0).sum(axis=1).rename(cc)
+
+        data.append(series)
+
+    return pd.concat(data, axis=1)
+
+
+def build_europe_generation(date_range):
+    """
+    Builds a timeseries of total generation in European countries.
+
+    Args:
+        date_range: pandas DatetimeIndex representing the desired date range.
+
+    Returns:
+        A pandas DataFrame with total generation, with full country names as column names.
+    """
+
+  # 1. Read from CSV and ensure timezone is UTC:
+    try:
+        data = pd.read_csv(
+            snakemake.output.europe_generation,
+            index_col=0,
+            parse_dates=True
+        ).tz_localize('utc')
+    except FileNotFoundError:
+        data = pd.DataFrame()
+
+    # 2. Check if the local CSV data covers the requested date range, convert the input to UTC
+    date_range_utc = date_range.tz_convert('utc')
+
+    if not data.empty and date_range_utc[0] >= data.index[0] and date_range_utc[-1] <= data.index[-1]:
+        return (
+            data
+            .reindex(date_range_utc, method='ffill')
+            .loc[date_range_utc]
+            .tz_convert(date_range.tz)
+        )
+
+    COUNTRIES = ['IE', 'DK', 'FR', 'NL', 'BE', 'NO']
+
+    # 3 & 4. Query ENTSO-E to fill gaps or all if local file is not covering the date range
+    entsoe_start = date_range_utc[0]
+    entsoe_end = date_range_utc[-1]
+    
+    entsoe_data = _query_entsoe_generation(
+        list(COUNTRIES),
+        entsoe_start,
+        entsoe_end
+        )
+
+    return (
+        entsoe_data
+        .tz_convert('utc')
+        .reindex(date_range.tz_convert('utc'), method='ffill')
+        .interpolate()
+    )
+
+
 def _query_entsoe_prices(countries, start, end):
     """Queries ENTSO-E API for day-ahead prices for the requested countries and date range."""
 

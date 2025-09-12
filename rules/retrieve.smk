@@ -14,6 +14,7 @@ rule build_base:
         ),
     output:
         date_register="data/base/{day}/settlement_period_register.csv",
+        europe_generation="data/base/{day}/europe_generation.csv",
         boundary_flow_constraints="data/base/{day}/boundary_flow_constraints.csv",
         physical_notifications="data/base/{day}/physical_notifications.csv",
         maximum_export_limits="data/base/{day}/maximum_export_limits.csv",
