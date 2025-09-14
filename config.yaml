@@ -4,6 +4,8 @@ scenario:
   start: '2022-02-01'
   end: '2022-02-28'
 
+solver: 'gurobi'
+
 tech_colors:
   nuclear: "#549ca2"
   biomass: "#dbc263"
@@ -31,3 +33,11 @@ nice_names:
   PHS: "Pumped Hydro Storage"
   battery: "Battery"
   demand_flex: "Flexible Demand"
+
+countries_cost_slopes: # data-driven values taken from Fig 3 in Mendes et al. (2024) 'EuroMod: Modelling European power markets...'
+  Belgium: 7.75 # EUR/GW
+  Denmark: 6.28 # EUR/GW
+  France: 0.94 # EUR/GW
+  Ireland: 5.5 # EUR/GW (copied value from DK, and scaled by population; data missing in paper)
+  Netherlands: 4.00 # EUR/GW
+  Norway: 1.85 # EUR/GW

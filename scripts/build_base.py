@@ -224,7 +224,7 @@ def get_accepted_units(date, period, so_only=True):
 
 def get_volumes(date, period):
 
-    units = get_accepted_units(date, period)
+    units = get_accepted_units(date, period, so_only=False)
     unit_params = '&'.join(f"bmUnit={urllib.parse.quote_plus(unit)}" for unit in units)
 
     data = list()
@@ -247,7 +247,7 @@ def get_volumes(date, period):
 
 def get_trades(date, period):
 
-    units = get_accepted_units(date, period)
+    units = get_accepted_units(date, period, so_only=False)
 
     response = requests.get(trades_url.format(date, period))
     response.raise_for_status()
@@ -370,8 +370,18 @@ def _query_entsoe_generation(countries, start, end):
 
     data = []
     for cc in countries:
-        series = client.query_generation(cc, start=start, end=end, psr_type=None)
-        series = series.replace(np.nan, 0).sum(axis=1).rename(cc)
+        max_retries = 20
+        for attempt in range(max_retries):
+            try:
+                series = client.query_generation(cc, start=start, end=end, psr_type=None)
+                series = series.replace(np.nan, 0).sum(axis=1).rename(cc)
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to query generation data for {cc} after {max_retries} attempts")
+                    raise e
+                logger.warning(f"Attempt {attempt + 1} failed for {cc}, retrying...")
+                time.sleep(1)  # Add small delay between retries
 
         data.append(series)
 
@@ -411,6 +421,7 @@ def build_europe_generation(date_range):
         )
 
     COUNTRIES = ['IE', 'DK', 'FR', 'NL', 'BE', 'NO']
+    country_names = ['Ireland', 'Denmark', 'France', 'Netherlands', 'Belgium', 'Norway']
 
     # 3 & 4. Query ENTSO-E to fill gaps or all if local file is not covering the date range
     entsoe_start = date_range_utc[0]
@@ -421,6 +432,8 @@ def build_europe_generation(date_range):
         entsoe_start,
         entsoe_end
         )
+    
+    entsoe_data.columns = country_names
 
     return (
         entsoe_data

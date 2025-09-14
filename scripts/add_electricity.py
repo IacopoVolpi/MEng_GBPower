@@ -404,6 +404,8 @@ def add_interconnectors(
         bmus,
         pn,
         europe_wholesale_prices,
+        europe_generation,
+        europe_cost_slopes,
         nemo,
         interconnection_mapper,
         interconnection_capacities,
@@ -414,11 +416,12 @@ def add_interconnectors(
 
     logger.info(f'Adding {len(interconnection_mapper)} interconnectors...')
 
-    for (ic, ic_bmunits) in interconnection_mapper.items():
+    country_ic_flows = pd.DataFrame(0, index=pn.index, columns=europe_generation.columns)
+
+    for ic, ic_bmunits in interconnection_mapper.items():
 
         p_nom = interconnection_capacities[ic]
         country = interconnection_countries[ic]
-        marginal_cost = europe_wholesale_prices.loc[:, country]
 
         # no data for Nemo at the moment
         if ic == 'Nemo':
@@ -427,17 +430,13 @@ def add_interconnectors(
                 'bus1': '4975',
             }
 
-            if ic_operation == 'static':
-                link_kwargs.update({
-                    'p_set': nemo.iloc[:,0]
-                })
-            else:
-                rr = nemo.iloc[:,0].diff().dropna().abs().max()
-                link_kwargs.update({
-                    'ramp_rate_up': rr,
-                    'ramp_rate_down': rr,
-                })
+            rr = nemo.iloc[:,0].diff().dropna().abs().max()
+            link_kwargs.update({
+                'ramp_rate_up': rr,
+                'ramp_rate_down': rr,
+            })
             p_nom = max(p_nom, nemo.iloc[:,0].abs().max())
+            flow = nemo.iloc[:,0]
 
         else:
             inter_flow = bmus.loc[
@@ -460,49 +459,18 @@ def add_interconnectors(
                 'bus1': gb_bus,
                 }
 
-            if ic_operation == 'static':
-                link_kwargs.update({
-                    'p_set': flow
-                })
-            else:
-                rr = flow.diff().dropna().abs().max()
-                link_kwargs.update({
-                    'ramp_rate_up': rr,
-                    'ramp_rate_down': rr,
-                })
+            
+            rr = flow.diff().dropna().abs().max()
+            link_kwargs.update({
+                'ramp_rate_up': rr,
+                'ramp_rate_down': rr,
+            })
 
             if (flow == 0).all():
                 logger.info(f'No interconnector flow data for {ic}')
                 continue
-
-        # this setup simulates a local market for each country that
-        # can either be supplied by local generators (if the local wholesale
-        # price is lower than GB wholesale price) or by GB generators
-        # via the interconnector (if the GB wholesale price is lower)
-        if not country in n.buses.index:
-            n.add(
-                'Bus',
-                country,
-                carrier='electricity',
-                x=country_coords[country][0],
-                y=country_coords[country][1],
-                country=country,
-                )
-            n.add(
-                "Load",
-                country.lower() + '_local_market',
-                bus=country,
-                p_set=pd.Series(0, index=pn.index),
-                carrier=country,
-                )
-            n.add(
-                "Generator",
-                country.lower() + '_local_market',
-                bus=country,
-                p_nom=0.,
-                marginal_cost=marginal_cost,
-                carrier="local_market",
-                )
+        
+        country_ic_flows[country] += flow
 
         n.add(
             "Link",
@@ -516,45 +484,121 @@ def add_interconnectors(
             **link_kwargs,
             )
 
-        n.generators.loc[country.lower() + '_local_market', 'p_nom'] += 2 * p_nom
-        n.loads_t.p_set.loc[:, country.lower() + '_local_market'] += (
-            pd.Series(p_nom, index=pn.index)
-        )
+    # improve realism of interconnector flows by scaling them to the max flow
+    # and setting ramp rate constraints based on the average ramp rate observed
+    # in real interconnector flows.
+    total_flow = pd.Series(0, pn.index)
 
-    # If the interconnector operation is 'flex', assign ramp rate constraints based on
-    # the average ramp rate observed in real interconnector flows.
-    if ic_operation == 'flex':
+    for (ic, ic_bmunits) in interconnection_mapper.items():
+        # no data for Nemo at the moment
+        if ic == 'Nemo':
+            total_flow += nemo.iloc[:,0].values
 
-        total_flow = pd.Series(0, pn.index)
+        else:
+            total_flow += (
+                pn.loc[:,pn.columns[
+                    pn.columns.str.contains('|'.join(ic_bmunits))]
+                    ].sum(axis=1)
+            )
 
-        for (ic, ic_bmunits) in interconnection_mapper.items():
-            # no data for Nemo at the moment
-            if ic == 'Nemo':
-                total_flow += nemo.iloc[:,0].values
+    ramp_rate = total_flow.diff().dropna().abs().mean()
+    max_flow = total_flow.abs().max()
 
-            else:
-                total_flow += (
-                    pn.loc[:,pn.columns[
-                        pn.columns.str.contains('|'.join(ic_bmunits))]
-                        ].sum(axis=1)
-                )
+    interconnectors = n.links.index[n.links.carrier == 'interconnector']
 
-        ramp_rate = total_flow.diff().dropna().abs().mean()
-        max_flow = total_flow.abs().max()
+    scaling_factor = max_flow / n.links.loc[interconnectors, 'p_nom'].sum()
+    n.links.loc[interconnectors, 'p_nom'] *= scaling_factor
 
-        interconnectors = n.links.index[n.links.carrier == 'interconnector']
+    if not interconnectors.empty:
+        total_nominal = n.links.loc[interconnectors, 'p_nom'].sum()
 
-        scaling_factor = max_flow / n.links.loc[interconnectors, 'p_nom'].sum()
-        n.links.loc[interconnectors, 'p_nom'] *= scaling_factor
+        ramp_rate_ppu = ramp_rate / total_nominal
+        logger.info(f"Setting interconnectors ramp rate to {ramp_rate_ppu:.3f} GW/30min")
 
-        if not interconnectors.empty:
-            total_nominal = n.links.loc[interconnectors, 'p_nom'].sum()
+        n.links.loc[interconnectors, 'ramp_limit_up'] = ramp_rate_ppu
+        n.links.loc[interconnectors, 'ramp_limit_down'] = ramp_rate_ppu
 
-            ramp_rate_ppu = ramp_rate / total_nominal
-            logger.info(f"Setting interconnectors ramp rate to {ramp_rate_ppu:.3f} GW/30min")
+    # this setup simulates a local market for each country that
+    # can either be supplied by local generators (if the local wholesale
+    # price is lower than GB wholesale price) or by GB generators
+    # via the interconnector (if the GB wholesale price is lower)
+    countries_in_model = europe_generation.columns.intersection(n.links.bus0)
+    generator_steps = 20 # steps
 
-            n.links.loc[interconnectors, 'ramp_limit_up'] = ramp_rate_ppu
-            n.links.loc[interconnectors, 'ramp_limit_down'] = ramp_rate_ppu
+    for country in countries_in_model:
+
+        if not country == 'Belgium':
+            continue
+
+        n.add(
+            'Bus',
+            country,
+            carrier='electricity',
+            x=country_coords[country][0],
+            y=country_coords[country][1],
+            country=country,
+            )
+
+        # this implements elastic marginal costs in neighbouring countries
+        # at the historic country generation levels q0, the marginal cost should
+        # equvalent to the day-ahead wholesale price m0.
+        # in case of deviation from q0, the marginal cost should deviate by s * deviation
+        # s is the slope of the cost curve, country-specific, and is taken from
+        # Mendes et al. (2024) 'EuroMod: Modelling European power markets...', Fig 3
+        # this is a linear stepwise implementation, representing the cost curve as
+        # many small generators
+
+        # steps: 
+        # 1. get country marginal cost
+        # 2. uncompute real interconnector flow, i.e. adjust marginal price to what
+        #    it would be if the interconnector flow was zero
+        # 3. add stepwise generators with increasing marginal costs.
+        #    values are taken from observed merit order steepness observed during that week
+        # 4. add load
+
+        country_flow = country_ic_flows.loc[:, country]
+        total_ic_capacity = n.links.loc[n.links.bus0 == country, 'p_nom'].sum()
+
+        if total_ic_capacity == 0:
+            country_generator_steps = 2
+        else:
+            country_generator_steps = generator_steps
+
+        m0 = europe_wholesale_prices.loc[:, country]
+        logger.warning('slope has to the converted to £ still!')
+        s = europe_cost_slopes[country] / 1000 # convert to £/MW
+
+        # uncompute interconnector flow from m0 based on the slope
+        m1 = m0 - s * country_flow
+
+        lower_cost_boundary = - s * total_ic_capacity
+        upper_cost_boundary = s * total_ic_capacity
+
+        cost_steps = np.linspace(
+            lower_cost_boundary,
+            upper_cost_boundary,
+            generator_steps).tolist()
+
+        step_capacity = total_ic_capacity / country_generator_steps * 2
+
+        for i, cost_step in enumerate(cost_steps):
+            n.add(
+                "Generator",
+                country.lower() + '_local_market_' + str(i),
+                bus=country,
+                p_nom=step_capacity,
+                marginal_cost=m1 + cost_step,
+                carrier="local_market",
+            )
+
+        n.add(
+            "Load",
+            country.lower() + '_local_market',
+            bus=country,
+            p_set=total_ic_capacity,
+            carrier=country,
+            )
+
 
 
 def ensure_thermal_supply(n):
@@ -612,6 +656,8 @@ def build_static_supply_curve(
         mel,
         wholesale_prices,
         europe_wholesale_prices,
+        europe_generation,
+        europe_cost_slopes,
         nemo,
         cfd_strike_prices,
         roc_values,
@@ -645,6 +691,8 @@ def build_static_supply_curve(
         bmus,
         pn,
         europe_wholesale_prices,
+        europe_generation,
+        europe_cost_slopes,
         nemo,
         interconnection_mapper,
         interconnection_capacities,
@@ -715,6 +763,8 @@ if __name__ == '__main__':
     day = snakemake.wildcards['day']
     ic_operation = snakemake.wildcards['ic'] # if 'static' set to actual trading, if 'flex' optimized by model
 
+    assert ic_operation == 'flex', 'Only flex is supported for now.'
+
     pn = pd.read_csv(
         snakemake.input['physical_notifications'],
         index_col=0,
@@ -735,6 +785,11 @@ if __name__ == '__main__':
         index_col=0,
         parse_dates=True
         )
+    europe_generation = pd.read_csv(
+        snakemake.input['europe_generation'],
+        index_col=0,
+        parse_dates=True
+        )
     nemo = pd.read_csv(
         snakemake.input['nemo_powerflow'],
         index_col=0,
@@ -744,8 +799,16 @@ if __name__ == '__main__':
     pn.index = pn.index.values
     mel.index = mel.index.values
     europe_wholesale_prices.index = europe_wholesale_prices.index.values
+    europe_generation.index = europe_generation.index.values
     dah.index = dah.index.values
     nemo.index = nemo.index.values
+
+    europe_cost_slopes = snakemake.params['countries_cost_slopes']
+
+    # fixes yaml related issue; NO for Norway translates to False in yaml
+    if False in list(europe_cost_slopes.keys()):
+        europe_cost_slopes['NO'] = europe_cost_slopes[False]
+        del europe_cost_slopes[False]
 
     thermal_generation_costs = (
         pd.read_csv(
@@ -819,6 +882,8 @@ if __name__ == '__main__':
         mel,
         thermal_generation_costs,
         europe_wholesale_prices,
+        europe_generation,
+        europe_cost_slopes,
         nemo,
         cfd_strike_prices,
         roc_values,

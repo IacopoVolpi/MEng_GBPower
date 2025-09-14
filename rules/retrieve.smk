@@ -14,7 +14,6 @@ rule build_base:
         ),
     output:
         date_register="data/base/{day}/settlement_period_register.csv",
-        europe_generation="data/base/{day}/europe_generation.csv",
         boundary_flow_constraints="data/base/{day}/boundary_flow_constraints.csv",
         physical_notifications="data/base/{day}/physical_notifications.csv",
         maximum_export_limits="data/base/{day}/maximum_export_limits.csv",
@@ -23,6 +22,7 @@ rule build_base:
         nemo_powerflow="data/base/{day}/nemo_powerflow.csv",
         day_ahead_prices="data/base/{day}/day_ahead_prices.csv",
         europe_day_ahead_prices="data/base/{day}/europe_day_ahead_prices.csv",
+        europe_generation="data/base/{day}/europe_generation.csv",
     resources:
         mem_mb=4000,
     log:

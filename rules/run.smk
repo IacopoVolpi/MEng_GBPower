@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: MIT
 
 rule add_electricity:
+    params:
+        countries_cost_slopes=config['countries_cost_slopes'],
     input:
         network='data/raw/lmp_base.nc',
         roc_values='data/prerun/roc_values.csv',
@@ -20,6 +22,7 @@ rule add_electricity:
         maximum_export_limits='data/base/{day}/maximum_export_limits.csv',
         physical_notifications='data/base/{day}/physical_notifications.csv',
         europe_day_ahead_prices='data/base/{day}/europe_day_ahead_prices.csv',
+        europe_generation='data/base/{day}/europe_generation.csv',
         nemo_powerflow="data/base/{day}/nemo_powerflow.csv",
     output:
         network="results/{day}/network_{ic}.nc"
@@ -77,6 +80,8 @@ rule cluster_network:
 
 
 rule solve_network:
+    params:
+        solver=config['solver'],
     input:
         bmus="data/prerun/prepared_bmus.csv",
         bids="data/base/{day}/bids.csv",

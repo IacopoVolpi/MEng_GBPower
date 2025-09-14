@@ -203,7 +203,7 @@ def safe_solve(n, factor=1):
         n.links = hold.links.copy()
 
         tune_line_capacities(n, factor)
-        status, _ = n.optimize()
+        status, _ = n.optimize(solver_name=solver_name)
         
         if status != 'ok':
             factor *= 1.02
@@ -219,6 +219,8 @@ if __name__ == '__main__':
     logger.warning('Relaxation factors for zonal and nodal should start at national redispatch relaxation factor')
 
     configure_logging(snakemake)
+
+    solver_name = snakemake.params['solver']
     
     idx = pd.IndexSlice
 
@@ -312,7 +314,8 @@ if __name__ == '__main__':
 
     tolerance = 0.05 # modelled balancing volume can deviate from actual balancing volume by this much
 
-    status, _ = n_national.optimize()
+    print('\n\nstarting national wholesale model\n\n')
+    status, _ = n_national.optimize(solver_name=solver_name)
     n_national.export_to_netcdf(snakemake.output['network_national'])
 
     model_execution_overview.append(
@@ -342,7 +345,7 @@ if __name__ == '__main__':
         
         hold_redispatch = n_national_redispatch.copy()
         tuned_line_capacities = tune_line_capacities(hold_redispatch, line_scaling_factor)
-        status, _ = hold_redispatch.optimize()
+        status, _ = hold_redispatch.optimize(solver_name=solver_name)
 
         if status == 'ok':
             balancing_volume = get_bidding_volume(n_national, hold_redispatch).sum()
@@ -432,7 +435,7 @@ if __name__ == '__main__':
 
     # status, relaxation_factor = safe_solve(n_zonal_redispatch) # old way of doing it
     # relax_line_capacities(n_zonal_redispatch, relaxation_factor) # new way of doing it
-    # status, _ = n_zonal_redispatch.optimize()
+    # status, _ = n_zonal_redispatch.optimize(solver_name=solver_name)
 
     status, relaxation_factor = safe_solve(n_zonal_redispatch, line_scaling_factor)
 
@@ -456,7 +459,7 @@ if __name__ == '__main__':
     # status, relaxation_factor = safe_solve(n_nodal) # old way of doing it
     # relax_line_capacities(n_nodal, relaxation_factor) # new way of doing it
     # tune_line_capacities(n_nodal, line_scaling_factor)
-    # status, _ = n_nodal.optimize()
+    # status, _ = n_nodal.optimize(solver_name=solver_name)
 
     status, relaxation_factor = safe_solve(n_nodal, line_scaling_factor)
 
