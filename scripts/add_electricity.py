@@ -527,9 +527,6 @@ def add_interconnectors(
 
     for country in countries_in_model:
 
-        if not country == 'Belgium':
-            continue
-
         n.add(
             'Bus',
             country,
