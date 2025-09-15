@@ -119,6 +119,42 @@ rule build_battery_phs_capacities:
         "../prerun_scripts/build_battery_phs_capacities.py"
 
 
+rule build_meritorder_slope_factors:
+    input:
+        # Estimates battery power and energy capacities based on a large dataset of
+        # historic physical notifications.
+        # Requires 300 days of data from build_base to be present to run
+        lambda wildcards: (
+            lambda glob: (
+                lambda files: (
+                    files if len(files) >= 300 else
+                    (_ for _ in ()).throw(
+                        Exception(
+                            f"Not enough data downloaded in directory 'data/base/'. "
+                            f"Expected at least 300 days of data, found {len(files)}."
+                            f"Use the rule 'build_base' to download more data."
+                        )
+                    )
+                )
+            )(glob.glob("data/base/*"))
+        )(
+            __import__('glob')
+        ),
+        bmu_locations="data/bmus_prepared.csv",
+        interconnection_helpers='data/interconnection_helpers.yaml',
+        network='data/prerun/helper_network.nc',
+    output:
+        "data/prerun/meritorder_slope_factors.csv"
+    resources:
+        mem_mb=4000,
+    log:
+        "../logs/build_meritorder_slope_factors.log",
+    conda:
+        "../envs/environment.yaml",
+    script:
+        "../prerun_scripts/build_meritorder_slope_factors.py"
+
+
 def get_thermal_costs_input_files(wildcards):
     year = int(wildcards.year)
     week = int(wildcards.week)
