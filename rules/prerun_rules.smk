@@ -144,7 +144,7 @@ rule build_meritorder_slope_factors:
         interconnection_helpers='data/interconnection_helpers.yaml',
         network='data/prerun/helper_network.nc',
     output:
-        "data/prerun/meritorder_slope_factors.csv"
+        # "data/prerun/meritorder_slope_factors.csv"
     resources:
         mem_mb=4000,
     log:

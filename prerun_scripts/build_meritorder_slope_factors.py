@@ -130,9 +130,16 @@ if __name__ == "__main__":
         index=ms
     )
 
+    assert result.notna().all().all(), 'Some values are NaN.'
+
+    baseline_gradient = result.loc[result.index.str.contains('2024'), 'gradient'].mean()
+
+    result['factor'] = result['gradient'] / baseline_gradient
+    
+    # 2019 was 1.5 times higher than 2024 gas price (https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/d7du/mm23)
+    result['factor_relative_to_2019'] = result['factor'] * 1.5
+
     logger.info(f'Saving merit order slope factors to {snakemake.output[0]}:')
     print(result.head())
-
-    assert result.notna().all().all(), 'Some values are NaN.'
 
     result.to_csv(snakemake.output[0])
