@@ -406,6 +406,7 @@ def add_interconnectors(
         europe_wholesale_prices,
         europe_generation,
         europe_cost_slopes,
+        meritorder_slope_factors,
         nemo,
         interconnection_mapper,
         interconnection_capacities,
@@ -517,6 +518,8 @@ def add_interconnectors(
 
         n.links.loc[interconnectors, 'ramp_limit_up'] = ramp_rate_ppu
         n.links.loc[interconnectors, 'ramp_limit_down'] = ramp_rate_ppu
+    
+    ######    ADDING LOAD AND LOCAL MARKET GENERATORS IN NEIGHBOURING COUNTRIES    ######
 
     # this setup simulates a local market for each country that
     # can either be supplied by local generators (if the local wholesale
@@ -549,7 +552,7 @@ def add_interconnectors(
         # 1. get country marginal cost
         # 2. uncompute real interconnector flow, i.e. adjust marginal price to what
         #    it would be if the interconnector flow was zero
-        # 3. add stepwise generators with increasing marginal costs.
+        # 3. add generators with stepwise increasing marginal costs.
         #    values are taken from observed merit order steepness observed during that week
         # 4. add load
 
@@ -564,6 +567,9 @@ def add_interconnectors(
         m0 = europe_wholesale_prices.loc[:, country]
         logger.warning('slope has to the converted to £ still!')
         s = europe_cost_slopes[country] / 1000 # convert to £/MW
+
+        month = n.snapshots[0].strftime('%Y-%m')
+        s *= meritorder_slope_factors.loc[month, 'factor_relative_to_2019']
 
         # uncompute interconnector flow from m0 based on the slope
         m1 = m0 - s * country_flow
@@ -595,7 +601,6 @@ def add_interconnectors(
             p_set=total_ic_capacity,
             carrier=country,
             )
-
 
 
 def ensure_thermal_supply(n):
@@ -655,6 +660,7 @@ def build_static_supply_curve(
         europe_wholesale_prices,
         europe_generation,
         europe_cost_slopes,
+        meritorder_slope_factors,
         nemo,
         cfd_strike_prices,
         roc_values,
@@ -690,6 +696,7 @@ def build_static_supply_curve(
         europe_wholesale_prices,
         europe_generation,
         europe_cost_slopes,
+        meritorder_slope_factors,
         nemo,
         interconnection_mapper,
         interconnection_capacities,
@@ -843,6 +850,11 @@ if __name__ == '__main__':
         snakemake.input['battery_phs_capacities'],
         index_col=0
         )
+    
+    meritorder_slope_factors = pd.read_csv(
+        snakemake.input['meritorder_slope_factors'],
+        index_col=0
+        )
 
     weights = pd.read_csv(snakemake.input['load_weights'], index_col=0)
     weights.index = weights.index.astype(str)
@@ -881,6 +893,7 @@ if __name__ == '__main__':
         europe_wholesale_prices,
         europe_generation,
         europe_cost_slopes,
+        meritorder_slope_factors,
         nemo,
         cfd_strike_prices,
         roc_values,

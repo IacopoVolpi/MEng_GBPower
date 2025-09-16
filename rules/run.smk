@@ -13,6 +13,7 @@ rule add_electricity:
         cfd_strike_prices=ancient('data/prerun/cfd_strike_prices.csv'),
         nuclear_marginal_price='data/prerun/nuclear_marginal_cost.csv',
         battery_phs_capacities='data/prerun/battery_phs_capacities.csv',
+        meritorder_slope_factors="data/prerun/meritorder_slope_factors.csv",
         interconnection_helpers='data/interconnection_helpers.yaml',
         thermal_generation_costs=lambda wildcards: 'data/prerun/thermal_costs/{year}-week{week}.csv'.format(
             year=datetime.strptime(wildcards.day, '%Y-%m-%d').year,
