@@ -109,14 +109,14 @@ if __name__ == "__main__":
 
         assert not ssload.empty, 'No data for month {m}'
         assert not ssprice.empty, 'No data for month {m}'
-        
+    
         ssload = ssload.values.reshape(-1)
         ssprice = ssprice.values.reshape(-1)
-        
+    
         mask = ~np.isnan(ssload) & ~np.isnan(ssprice)
         ssload_clean = ssload[mask]
         ssprice_clean = ssprice[mask]
-        
+
         slope, intercept, r_value, p_value, std_err = stats.linregress(ssload_clean, ssprice_clean)
 
         gradients.append(slope)
