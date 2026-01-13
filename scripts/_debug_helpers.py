@@ -1,8 +1,8 @@
 '''Helpers for quick bug locating'''
-
+#this script contains helper functions for debugging network models by removing specific components such as interconnectors and storage units.
 def remove_interconnectors(n):
     '''helper function for debugging'''
-
+    # remove all interconnectors, local market generators, and non-electricity loads from the network model 'n'. 
     for l in n.links.index[n.links.carrier == 'interconnector']:
         n.remove("Link", l)
     

@@ -1,3 +1,4 @@
+#this script contains helper functions used across multiple scripts. an helper function is used for path management, logging configuration, date-time conversions, annuity calculations, cost loading, scenario configuration, network consistency checks, nested attribute setting, and geographic classification.
 import time
 import yaml
 import pandas as pd
@@ -9,21 +10,24 @@ from requests.exceptions import HTTPError
 from snakemake.utils import update_config
 
 
+
 REGION_COLS = ["geometry", "name", "x", "y", "country"]
 
-
+# convert UTC timestamp to day and settlement period, something like '2019-01-01 00:00:00+00:00' -> '2019-01-01', 1 or '2019-01-01 23:30:00+00:00' -> '2019-01-01', 48
 def to_date_period(dt):
     assert dt.tz is not None, 'Datetime must have timezone'
     dt = dt.tz_convert('Europe/London')
     return dt.strftime('%Y-%m-%d'), dt.hour * 2 + dt.minute // 30 + 1
 
-
+#reverse of above
+# convert day and settlement period to UTC timestamp, something like '2019-01-01', 1 -> '2019-01-01 00:00:00+00:00' or '2019-01-01', 48 -> '2019-01-01 23:30:00+00:00'
 def to_datetime(day, period):
     return pd.Timestamp(day, tz='Europe/London').tz_convert('utc') + pd.Timedelta(minutes=30) * (period - 1)
 
-
+# build a date range for a given day or start and end dates. it is used to ensure consistency between datasets by providing a uniform way to create date ranges.
 def to_daterange(*args):
     '''Somewhat redundant, but ensures consistency between datasets'''
+
 
     if len(args) == 2:
         assert (start.tz is not None + end.tz is not None) == 2, 'Both start and end must be timezone-naive'
@@ -177,16 +181,18 @@ def calculate_annuity(n, r):
 
     discount rate of r, e.g. annuity(20, 0.05) * 20 = 1.6
     """
+    #pd.series is a variable type representing a one-dimensional array with axis labels in pandas library.
     if isinstance(r, pd.Series):
         return pd.Series(1 / n, index=r.index).where(
             r == 0, r / (1.0 - 1.0 / (1.0 + r) ** n)
         )
     elif r > 0:
         return r / (1.0 - 1.0 / (1.0 + r) ** n)
+    #if discount rate is 0, annuity is simply 1/n, no interest applied.
     else:
         return 1 / n
 
-
+#this function updates the maximum nominal power of generators in the network model based on their minimum and maximum capacities. it ensures that the installed capacity does not exceed the expansion limit.
 def update_p_nom_max(n):
     # if extendable carriers (solar/onwind/...) have capacity >= 0,
     # e.g. existing assets from the OPSD project are included to the network,
@@ -195,29 +201,34 @@ def update_p_nom_max(n):
 
     n.generators.p_nom_max = n.generators[["p_nom_min", "p_nom_max"]].max(1)
 
-
+#this fuction loads and processes technology cost data from a CSV file. it calculates capital costs, marginal costs, and co2 emissions for various technologies based on the provided configuration and parameters.
 def load_costs(tech_costs, config, max_hours, Nyears=1.0):
     # set all asset costs and other parameters
     costs = pd.read_csv(tech_costs, index_col=[0, 1]).sort_index()
 
-    # correct units to MW
+    # correct units to MW from kW
     costs.loc[costs.unit.str.contains("/kW"), "value"] *= 1e3
     costs.unit = costs.unit.str.replace("/kW", "/MW")
 
+#for missing values in the costs dataframe, fill them using the provided fill values from the config dictionary.
     fill_values = config["fill_values"]
     costs = costs.value.unstack().fillna(fill_values)
 
+    #this calculates the capital cost for each technology for each year of operation.
     costs["capital_cost"] = (
         (
+            #FOM stands for Fixed Operating and Maintenance costs
             calculate_annuity(costs["lifetime"], costs["discount rate"])
             + costs["FOM"] / 100.0
         )
         * costs["investment"]
         * Nyears
     )
+    #assigns fuel costs for OCGT and CCGT technologies based on gas fuel costs.
     costs.at["OCGT", "fuel"] = costs.at["gas", "fuel"]
     costs.at["CCGT", "fuel"] = costs.at["gas", "fuel"]
 
+    #VOM stands for Variable Operating and Maintenance costs
     costs["marginal_cost"] = costs["VOM"] + costs["fuel"] / costs["efficiency"]
 
     costs = costs.rename(columns={"CO2 intensity": "co2_emissions"})
@@ -258,7 +269,7 @@ def load_costs(tech_costs, config, max_hours, Nyears=1.0):
 
     return costs
 
-
+#used to load scenario-specific configuration settings from a YAML file and update the main configuration dictionary accordingly. it allows for dynamic adjustment of parameters based on the selected scenario.
 def set_scenario_config(snakemake):
     scenario = snakemake.config["run"].get("scenarios", {})
     if scenario.get("enable") and "run" in snakemake.wildcards.keys():
@@ -273,7 +284,7 @@ def set_scenario_config(snakemake):
                 scenario_config = yaml.safe_load(f)
         update_config(snakemake.config, scenario_config[snakemake.wildcards.run])
 
-
+#used to check if the network model is a single connected graph. it identifies any isolated buses that are not connected to the main system.
 def check_network_consistency(n):
     """Checks if the network is one connected graph. Returns isolated buses"""
 
@@ -302,14 +313,15 @@ def set_nested_attr(obj, attr_path, value):
 
     setattr(obj, attrs[-1], value)
 
-
+#this function classifies geographic locations in Great Britain into northern and southern regions based on their longitude and latitude coordinates. it uses a linear boundary to separate the two regions.
 def classify_north_south(lon, lat):
     """Splits GB into north and south, where north represents regions 
     with diminished wholesale market prices"""
 
     lon = float(lon)
     lat = float(lat)
-
+# linear boundary: y = mx + b
+# m is the slope, b is the y-intercept
     m = 0.55
     b = 56.4
 

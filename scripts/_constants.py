@@ -2,6 +2,7 @@ import pandas as pd
 
 
 # data on daylight savings start and end dates
+#pd.to_datetime is used to ensure the dates are in the correct format, it converts strings to Timestamps.
 dst_start_dates = pd.to_datetime([
     '2019-03-31',
     '2020-03-29',
@@ -38,10 +39,11 @@ def classify_day(day):
 
     raise ValueError('Couldnt classify date.')
 
-
+# build a settlement period register for a given day
 def build_sp_register(day):
     mode = classify_day(day)
 
+# convert day to start of day in UTC, accounting for local time zone (Europe/London) and DST changes
     start = pd.Timestamp(day, tz='Europe/London').tz_convert('UTC')
 
     if mode == 'winter' or mode == 'summer':
@@ -53,6 +55,7 @@ def build_sp_register(day):
     else:
         raise ValueError(f'Mode {mode} not recognised.')
 
+# build dataframe with settlement periods as a column and datetime index 
     return pd.DataFrame(
         {
             'settlement_period': range(1, periods+1)
