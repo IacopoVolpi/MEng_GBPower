@@ -31,3 +31,15 @@ rule build_base:
         "../envs/environment.yaml",
     script:
         "../scripts/build_base.py"
+
+
+rule build_submitted_bids_offers:
+    output:
+        submitted_bids="data/base/{day}/submitted_bids.csv",
+        submitted_offers="data/base/{day}/submitted_offers.csv",
+    log:
+        "../logs/submitted_bids_offers/{day}.log"
+    resources:
+        mem_mb=2000
+    script:
+        "../scripts/build_all_bm_actions.py"

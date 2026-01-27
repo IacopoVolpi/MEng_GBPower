@@ -98,3 +98,22 @@ rule summarize_frontend_data:
         "../envs/environment.yaml",
     script:
         "../scripts/summarize_frontend_data.py"
+
+
+rule clear_balancing_market:
+    input:
+        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
+        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
+        submitted_offers="data/base/{day}/submitted_offers.csv",
+        submitted_bids="data/base/{day}/submitted_bids.csv",
+    output:
+        clearing_results="results/{day}/Balancing_Market_clearing_results_{ic}.csv",
+        accepted_actions="results/{day}/Balancing_Market_accepted_actions_{ic}.csv",
+    log:
+        "../logs/clearing/{day}_{ic}.log"
+    resources:
+        mem_mb=2000,
+    conda:
+        "../envs/environment.yaml",
+    script:
+        "../scripts/clear_balancing_market.py"

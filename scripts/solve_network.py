@@ -72,11 +72,11 @@ def insert_flow_constraints(
 
 
 def freeze_battery_commitments(n_from, n_to):
-    '''
-    Takes wholesale commitments of batteries and PHS from n_from and inserts them 
-    into n_to, i.e. n_to HAS TO operate the respective storage units in the same
-    way as n_from.
-    '''
+    # '''
+    # Takes wholesale commitments of batteries and PHS from n_from and inserts them 
+    # into n_to, i.e. n_to HAS TO operate the respective storage units in the same
+    # way as n_from.
+    # '''
 
     for su in n_from.storage_units_t['p'].columns:
 
@@ -98,11 +98,11 @@ def freeze_battery_commitments(n_from, n_to):
 
 
 def freeze_interconnector_commitments(n_from, n_to):
-    '''
-    Takes wholesale commitments of interconnectors from n_from and inserts them 
-    into n_to, i.e. n_to HAS TO operate the respective interconnectors in the same
-    way as n_from.
-    '''
+    # '''
+    # Takes wholesale commitments of interconnectors from n_from and inserts them 
+    # into n_to, i.e. n_to HAS TO operate the respective interconnectors in the same
+    # way as n_from.
+    # '''
     
     ic = n_from.links.loc[n_from.links.carrier == 'interconnector'].index
     n_to.links_t.p_set.loc[:, ic] = n_from.links_t.p0.loc[:, ic]
@@ -114,15 +114,15 @@ def get_line_grouping(
         boundaries,           # dict: boundary_name -> list of line IDs forming that boundary
         anchor_buses          # dict: boundary_name -> list of known buses for that boundary
     ):
-    """
-    Returns the lines of regions neighboring transmission boundaries such that 
-    the thermal constraints available for the boundaries themselves are also applied
-    to the regions surrounding them.
 
-    n: The network object with n.buses and n.links
-    boundaries: e.g. {"Scotland-England": ["Line1", "Line2"], ...}
-    anchor_buses: e.g. {"Scotland-England": "BusN1", ...} for BFS to identify 'north' side
-    """
+    # Returns the lines of regions neighboring transmission boundaries such that 
+    # the thermal constraints available for the boundaries themselves are also applied
+    # to the regions surrounding them.
+
+    # n: The network object with n.buses and n.links
+    # boundaries: e.g. {"Scotland-England": ["Line1", "Line2"], ...}
+    # anchor_buses: e.g. {"Scotland-England": "BusN1", ...} for BFS to identify 'north' side
+ 
 
     boundary_assignments = {}
     
@@ -186,13 +186,13 @@ def rstu(n):
 
 
 def tune_line_capacities(n, factor):
-    '''
-    Multiplies line capacities by a factor.
-    '''
+
     assert n.lines.empty, 'Current setup is for full DC approximation.'
     n.links.loc[n.links.carrier != 'interconnector', 'p_nom'] *= factor
 
 
+# wrapper to solve wholesale market schedule
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 def safe_solve(n, factor=1):
 
     status = 'not_solved'
@@ -213,7 +213,6 @@ def safe_solve(n, factor=1):
 
     return status, np.around(factor, decimals=3)
 
-
 if __name__ == '__main__':
 
     logger.warning('Relaxation factors for zonal and nodal should start at national redispatch relaxation factor')
@@ -227,6 +226,35 @@ if __name__ == '__main__':
     bids = pd.read_csv(snakemake.input['bids'], index_col=[0,1], parse_dates=True)
     bmus = pd.read_csv(snakemake.input['bmus'], index_col=0)
 
+
+
+    
+# Clean the BMU table
+
+# It removes rows where lat is the string "distributed" and converts the remaining latitude values to real numbers.
+# This is just data cleaning so latitude can be used in filtering.
+
+# Reduce bids to total volume per unit
+
+# It keeps only the volume rows in the bids table and sums them up.
+
+# After that, each BMU has a single total bid volume for the day (not prices).
+
+# Pick which units are “likely to curtail”
+
+# It selects:
+
+# Renewables (onwind, offwind, hydro, cascade), and
+
+# Thermals north of latitude 55.3.
+# These are the units the model assumes are most likely to be curtailed by congestion.
+
+# Compute the total daily bid volume for those units
+
+# It sums the bid volumes only for those selected units.
+
+# This becomes daily_volume.
+   
     bmus = bmus.loc[bmus['lat'] != 'distributed']
     bmus['lat'] = bmus['lat'].astype(float)
 
@@ -237,6 +265,7 @@ if __name__ == '__main__':
     renewable_bmus = bmus[
         bmus.carrier.isin(['onwind', 'offwind', 'hydro', 'cascade'])
         ].index
+    #also pick thermal in north scotland, so north of latitude 55.3
     thermal_bmus = bmus[
         (bmus.carrier.isin(['fossil', 'biomass', 'coal'])) & 
         (bmus['lat'] > 55.3)
@@ -249,11 +278,20 @@ if __name__ == '__main__':
         bids.index.intersection(bid_counting_units)
         ].sum()
 
+
+# Load the boundary flow constraints
+# This reads a CSV that contains time‑series flow limits for each transmission boundary (corridor).
+# These are the limits used later when inserting flow constraints into the network.
+
     flow_constraints = pd.read_csv(
         snakemake.input['boundary_flow_constraints'],
         index_col=0,
         parse_dates=True
     )
+
+#Load the boundary definitions
+# This YAML file maps each boundary name to the line IDs that make up that boundary.
+# So the script knows which lines correspond to each corridor.
 
     with open(snakemake.input['transmission_boundaries']) as f:
         boundaries = yaml.safe_load(f)
@@ -272,6 +310,16 @@ if __name__ == '__main__':
     # as the regional interpretation of the boundaries.
     # I.e. for instance all lines in Scotland north of SSE-SP have the same thermal constraints
     # applied to them as the boundary itself.
+
+# The anchors dictionary gives the script a known bus on one side of each transmission boundary.
+# Think of an anchor as a reference point that tells the script:
+
+# This bus is definitely on the north (or one) side of boundary X. 
+# 'SSE-SP': ['6441']
+
+# This means: bus 6441 is definitely on one side of the SSE‑SP boundary.
+
+
     anchors = {
         'SSE-SP': ['6441'],
         'SCOTEX': ['5912'],
@@ -290,6 +338,10 @@ if __name__ == '__main__':
     n_zonal = pypsa.Network(snakemake.input['network_zonal'])
 
 
+# Why: The published corridor limits are meant to represent regional bottlenecks, not just the exact boundary lines. If you only constrain the boundary lines themselves, the model could reroute power through nearby regional lines and effectively bypass the real-world limit.
+# So the script expands each boundary to include adjacent regional lines on the same side, making the constraint behave more like a real transmission corridor limit rather than a single line bottleneck. That’s why it calls get_line_grouping(...) before applying constraints.
+
+
     groupings = get_line_grouping(
         n_nodal.buses, 
         n_nodal.links.loc[n_nodal.links.carrier != 'interconnector', :],
@@ -297,12 +349,20 @@ if __name__ == '__main__':
         anchors
         )
 
+# #Why: The same set of boundary data (flow constraints, boundary definitions, groupings) needs to be applied to multiple networks (national redispatch, nodal wholesale, zonal wholesale, zonal redispatch).
+# Bundling them into args avoids repetition and makes sure every network gets identical boundary handling, which is crucial for comparability across market designs.
     # args = (flow_constraints, boundaries, calibration_parameters, groupings)
     args = (flow_constraints, boundaries, groupings)
+
+
+# Why: The redispatch (balancing) models should start from the same base topology as the wholesale model but allow different behavior (e.g., different constraints or frozen commitments).
+# Creating separate network copies lets the script enforce redispatch logic without altering the original wholesale networks, so each market stage is solved cleanly and independently.
 
     n_national_redispatch = pypsa.Network(snakemake.input['network_nodal'])
     n_zonal_redispatch = pypsa.Network(snakemake.input['network_nodal'])
 
+
+# It checks that n_nodal.lines is empty, meaning the model uses links (DC approximation) rather than AC line objects.
     assert n_nodal.lines.empty, 'Current setup is for full DC approximation.'
 
     insert_flow_constraints(n_national_redispatch, *args, model_name='national balancing')
@@ -314,9 +374,25 @@ if __name__ == '__main__':
 
     tolerance = 0.05 # modelled balancing volume can deviate from actual balancing volume by this much
 
+
+# Solve the national wholesale market
+# It runs the national network optimization (n_national.optimize) and saves the solved network.
+# Why: This gives the baseline day‑ahead schedule used by later balancing/redispatch steps. 
+# Without this, you don’t know the wholesale commitments to respect in balancing.
+
+# .optimize(...):
+
+# builds a mathematical optimisation problem
+# sends it to the chosen solver (e.g. Gurobi, HiGHS)
+# tries to find a feasible + optimal solution
+
+
     print('\n\nstarting national wholesale model\n\n')
     status, _ = n_national.optimize(solver_name=solver_name)
     n_national.export_to_netcdf(snakemake.output['network_national'])
+
+
+
 
     model_execution_overview.append(
         ('national wholesale', status, '-', '-') 
@@ -327,6 +403,9 @@ if __name__ == '__main__':
     if snakemake.wildcards.ic == 'flex':
         logger.info('Freezing interconnector commitments')
         freeze_interconnector_commitments(n_national, n_national_redispatch)
+
+
+ 
 
     # the following loop ensures that modelled balancing volume matches actual balancing volume
     tuned = False
@@ -345,7 +424,11 @@ if __name__ == '__main__':
         
         hold_redispatch = n_national_redispatch.copy()
         tuned_line_capacities = tune_line_capacities(hold_redispatch, line_scaling_factor)
+        # here is where the actual redispatch occurs.
+        # the Network is reoptimized but this time under real flow constraint and frozen wholesale commitments!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         status, _ = hold_redispatch.optimize(solver_name=solver_name)
+
+
 
         if status == 'ok':
             balancing_volume = get_bidding_volume(n_national, hold_redispatch).sum()

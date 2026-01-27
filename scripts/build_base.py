@@ -18,7 +18,6 @@ Functions
 - `build_boundary_flow_limits(date)`: Placeholder function for fetching boundary flow limits.
 """
 
-
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,6 +53,7 @@ pn_url = (
 
 def build_physical_notifications_period(date, period):
 
+    #robust_request is a wrapper around requests.get that retries on failure, it comes from _elexon_helpers.py
     response = robust_request(requests.get, pn_url.format(date, period), wait_time=1)
     df = pd.read_csv(StringIO(response.text))
 
@@ -191,16 +191,18 @@ volumes_url = (
     "https://data.elexon.co.uk/bmrs/api/v1/balancing/settlement/"
     "indicative/volumes/all/{}/{}/{}?format=json&{}"
 )
-# to get prices of bids and offers
+# to get prices of bids and offers 
 trades_url = (
         'https://data.elexon.co.uk/bmrs/api/v1/balancing/bid-offer/' +
         'all?settlementDate={}&settlementPeriod={}&format=csv'
     )
 
-
+# get bm units that were accepted by the system operator in the given period. it returns the values of the NationalGridBmUnit column
 def get_accepted_units(date, period, so_only=True):
 
+#request.get sends a GET request to the specified URL and returns a response object
     response = requests.get(accepts_url.format(date, period))
+    #this will raise an error if the request was not successful
     response.raise_for_status()
     
     acc = pd.read_csv(StringIO(response.text))
@@ -221,9 +223,11 @@ def get_accepted_units(date, period, so_only=True):
     except ValueError:
         return np.array([], dtype=str)
 
-
+# get volumes of bids and offers for the accepted bm units, the outputs are two dataframes, one for bids and one for offers
 def get_volumes(date, period):
 
+
+#units is created by calling get_accepted_units function, which was defined earlier
     units = get_accepted_units(date, period, so_only=False)
     unit_params = '&'.join(f"bmUnit={urllib.parse.quote_plus(unit)}" for unit in units)
 
@@ -255,11 +259,10 @@ def get_trades(date, period):
 
     return trades_df[trades_df['NationalGridBmUnit'].isin(units)]
 
-
 _cache = {}
 _calls_remaining = {}
 
-# both bids and offers build on the same data, so we cache the volumes and trades
+# both bids and offers build on the same data, so we cache the volumes and trades so we dont have to fetch data from the API twice
 def _cache_volumes_trades(func):
     @wraps(func)
     def wrapper(date, period):
