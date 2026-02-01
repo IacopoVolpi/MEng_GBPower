@@ -100,7 +100,7 @@ rule summarize_frontend_data:
         "../scripts/summarize_frontend_data.py"
 
 
-rule clear_balancing_market:
+rule IV_clear_balancing_market:
     input:
         network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
         network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
@@ -117,3 +117,20 @@ rule clear_balancing_market:
         "../envs/environment.yaml",
     script:
         "../scripts/clear_balancing_market.py"
+
+rule IV_distribute_balancing_volumes:
+    input:
+        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
+        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
+        transmission_boundaries="data/transmission_boundaries.yaml",
+    output:
+        per_constraint_balancing="results/{day}/per_constraint_balancing_{ic}.csv",
+        detailed_breakdown="results/{day}/constraint_balancing_breakdown_{ic}.csv",
+    log:
+        "../logs/distribute_balancing/{day}_{ic}.log"
+    resources:
+        mem_mb=2000,
+    conda:
+        "../envs/environment.yaml"
+    script:
+        "../scripts/IV_distribute_balancing_volumes.py"

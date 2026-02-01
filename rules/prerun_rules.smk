@@ -345,3 +345,19 @@ rule build_flow_constraints:
         "../envs/environment.yaml",
     script:
         "../prerun_scripts/build_flow_constraints.py"
+
+
+rule IV_classify_bmu_constraints:
+    input:
+        network="data/base.nc",
+        transmission_boundaries="data/transmission_boundaries.yaml",
+        bmus="data/prerun/prepared_bmus.csv",
+    output:
+        bmu_constraint_classification="data/prerun/bmu_constraint_classification.csv",
+        balancing_constraint_boundaries="data/prerun/balancing_constraint_boundaries.yaml",
+    log:
+        "logs/classify_bmu_constraints.log"
+    conda:
+        "../envs/environment.yaml"
+    script:
+        "../scripts/IV_classify_bmu_constraints.py"
