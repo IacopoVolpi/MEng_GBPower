@@ -10,14 +10,10 @@ of the 5 critical transmission constraints (SSE-SP, SCOTEX, SSHARN, FLOWSTH, SEI
 Method:
 --------
 For each constraint corridor:
-1. Sum absolute flows through all its lines in the wholesale (day-ahead) solution
-2. Sum absolute flows through all its lines in the redispatch (balancing) solution
-3. Calculate the flow change: |flow_redispatch - flow_wholesale|
-4. This change represents how much redispatch was needed to manage that constraint
-5. Normalize all constraint changes to sum to the total balancing volume
+1. Calculate net flow through the constraint in redispatch solution (signed sum of line flows)
+2. Distribute total balancing volume proportionally to absolute flow magnitudes
 
-This ensures the per-constraint volumes are proportionally consistent with the
-global balancing volume already calculated by the model.
+The total distributed volume equals the real submitted bid volume from the model.
 """
 
 import logging
@@ -31,9 +27,9 @@ import pypsa
 from _helpers import configure_logging
 
 
-def get_constraint_flow(network, constraint_line_ids, stage='wholesale'):
+def get_constraint_flow(network, constraint_line_ids):
     """
-    Calculate total absolute flow through a constraint's lines.
+    Calculate net flow through a constraint's lines (signed sum, then absolute value).
     
     Parameters:
     -----------
@@ -41,141 +37,102 @@ def get_constraint_flow(network, constraint_line_ids, stage='wholesale'):
         Network with solved flows
     constraint_line_ids : List[str]
         Line IDs making up the constraint
-    stage : str
-        Stage label for logging ('wholesale' or 'redispatch')
     
     Returns:
     --------
     float
-        Total MWh flowing through constraint over the day
+        Net MWh flowing through constraint over the day
     """
     total_flow_mwh = 0
-    lines_found = 0
     
     for line_id in constraint_line_ids:
-        # Check if line exists in network links (transmission lines are stored as links in DC model)
         if line_id in network.links_t.p0.columns:
-            # Sum absolute flows across all timesteps, convert MW to MWh (0.5 for 30-min periods)
-            flow_mwh = network.links_t.p0[line_id].abs().sum() * 0.5
+            flow_mwh = network.links_t.p0[line_id].sum() * 0.5
             total_flow_mwh += flow_mwh
-            lines_found += 1
     
-    if lines_found == 0:
-        logger.warning(f"No lines found for constraint in {stage} network")
-    
-    return total_flow_mwh
+    return abs(total_flow_mwh)
 
 
 def calculate_per_constraint_balancing_volume(
-    n_wholesale,
     n_redispatch,
     boundaries,
     total_balancing_volume,
 ):
     """
-    Distribute total balancing volume across constraints based on flow changes.
+    Distribute total balancing volume across constraints based on flow magnitudes.
     
     Parameters:
     -----------
-    n_wholesale : pypsa.Network
-        Solved wholesale (day-ahead) network
     n_redispatch : pypsa.Network
         Solved redispatch (balancing) network
     boundaries : dict
         Mapping of constraint names to line IDs
     total_balancing_volume : float
-        Total balancing volume (MWh) calculated by the model
+        Total balancing volume (MWh) from submitted bids
     
     Returns:
     --------
     pd.Series
         Per-constraint balancing volumes (index = constraint name, values = MWh)
     pd.DataFrame
-        Detailed breakdown with wholesale flow, redispatch flow, and change
+        Detailed breakdown with flow, proportion, and balancing volume per constraint
+    float
+        Total flow change across all constraints
     """
     
-    logger.info("\n" + "="*80)
-    logger.info("Distributing total balancing volume across 5 transmission constraints")
-    logger.info("="*80 + "\n")
+    constraint_flows = {}
     
-    constraint_data = {}
-    flow_changes = {}
+    # Calculate flow through each constraint
+    for constraint_name, line_ids in boundaries.items():
+        flow = get_constraint_flow(n_redispatch, line_ids)
+        constraint_flows[constraint_name] = flow
     
-    # For each constraint, calculate flow change
-    for constraint_name in sorted(boundaries.keys()):
-        line_ids = boundaries[constraint_name]
-        
-        # Get flows in both solutions
-        wholesale_flow = get_constraint_flow(n_wholesale, line_ids, stage='wholesale')
-        redispatch_flow = get_constraint_flow(n_redispatch, line_ids, stage='redispatch')
-        
-        # Flow change = how much redispatch changed the flow through this constraint
-        flow_change = abs(redispatch_flow - wholesale_flow)
-        
-        constraint_data[constraint_name] = {
-            'wholesale_flow_mwh': wholesale_flow,
-            'redispatch_flow_mwh': redispatch_flow,
-            'flow_change_mwh': flow_change,
-        }
-        
-        flow_changes[constraint_name] = flow_change
-        
-        logger.info(f"{constraint_name:10s} | Wholesale: {wholesale_flow:10.1f} MWh | "
-                   f"Redispatch: {redispatch_flow:10.1f} MWh | "
-                   f"Change: {flow_change:10.1f} MWh")
+    # Distribute proportionally by flow magnitude
+    total_flow = sum(constraint_flows.values())
     
-    logger.info("\n")
-    
-    # Normalize flow changes to distribute total balancing volume proportionally
-    total_flow_change = sum(flow_changes.values())
-    
-    if total_flow_change < 1e-6:  # Avoid division by zero
-        logger.warning("Total flow change is near zero. Distributing equally across constraints.")
-        # Fall back to equal distribution
+    if total_flow < 1e-6:
+        logger.warning("No flow found. Distributing equally.")
         per_constraint = total_balancing_volume / len(boundaries)
         constraint_balancing = pd.Series(
             {name: per_constraint for name in boundaries.keys()}
         )
     else:
-        # Distribute proportionally
         constraint_balancing = pd.Series({
-            name: (flow_changes[name] / total_flow_change) * total_balancing_volume
+            name: (constraint_flows[name] / total_flow) * total_balancing_volume
             for name in boundaries.keys()
         })
     
-    # Add balancing volume to the detailed breakdown
-    for constraint_name in constraint_data.keys():
-        constraint_data[constraint_name]['balancing_volume_mwh'] = constraint_balancing[constraint_name]
+    # Create detailed breakdown dataframe
+    breakdown_data = {}
+    for constraint_name in constraint_flows.keys():
+        flow = constraint_flows[constraint_name]
+        balancing_vol = constraint_balancing[constraint_name]
+        proportion = (balancing_vol / total_balancing_volume * 100) if total_balancing_volume > 0 else 0
+        
+        breakdown_data[constraint_name] = {
+            'constraint_flow_mwh': flow,
+            'flow_proportion': flow / total_flow * 100 if total_flow > 0 else 0,
+            'balancing_volume_mwh': balancing_vol,
+            'balancing_proportion': proportion,
+        }
     
-    # Create detailed dataframe
-    detailed_df = pd.DataFrame(constraint_data).T
-    detailed_df['proportion'] = detailed_df['balancing_volume_mwh'] / total_balancing_volume
+    detailed_df = pd.DataFrame(breakdown_data).T
     
-    # Validation: ensure sum matches total
+    # Validation
     sum_constraint_balancing = constraint_balancing.sum()
     error = abs(sum_constraint_balancing - total_balancing_volume)
-    error_percent = (error / total_balancing_volume * 100) if total_balancing_volume > 0 else 0
     
     logger.info("Per-Constraint Balancing Volume Distribution:")
-    logger.info("-" * 80)
     for constraint_name in sorted(constraint_balancing.index):
         vol = constraint_balancing[constraint_name]
         prop = vol / total_balancing_volume * 100 if total_balancing_volume > 0 else 0
         logger.info(f"{constraint_name:10s}: {vol:10.2f} MWh ({prop:5.1f}%)")
     
-    logger.info("-" * 80)
-    logger.info(f"{'Total':10s}: {sum_constraint_balancing:10.2f} MWh (100.0%)")
+    logger.info(f"{'Total':10s}: {sum_constraint_balancing:10.2f} MWh")
     logger.info(f"Model total: {total_balancing_volume:10.2f} MWh")
-    logger.info(f"Difference:  {error:10.2f} MWh ({error_percent:.4f}%)")
+    logger.info(f"Difference:  {error:10.2f} MWh")
     
-    if error_percent > 0.01:  # Tolerance of 0.01%
-        logger.warning(f"Distribution error exceeds tolerance! Error: {error_percent:.4f}%")
-    else:
-        logger.info("✓ Distribution validated: sum equals total balancing volume")
-    
-    logger.info("\n")
-    
-    return constraint_balancing, detailed_df
+    return constraint_balancing, detailed_df, total_flow
 
 
 if __name__ == '__main__':
@@ -184,7 +141,6 @@ if __name__ == '__main__':
     
     # Load networks
     logger.info("Loading networks...")
-    n_wholesale = pypsa.Network(snakemake.input['network_wholesale'])
     n_redispatch = pypsa.Network(snakemake.input['network_redispatch'])
     
     # Load transmission boundaries
@@ -193,26 +149,52 @@ if __name__ == '__main__':
     
     logger.info(f"Loaded {len(boundaries)} transmission constraints")
     
-    # Get total balancing volume (already calculated by model)
-    # This is stored in the network results - we need to recalculate it to ensure consistency
-    from summarize_system_cost import get_bidding_volume
-    
-    total_balancing_volume = get_bidding_volume(n_wholesale, n_redispatch).sum()
-    logger.info(f"Total balancing volume from model: {total_balancing_volume:.2f} MWh\n")
+    # Load bids and BMUs to calculate real daily balancing volume
+    idx = pd.IndexSlice
+    bids = pd.read_csv(snakemake.input['bids'], index_col=[0,1], parse_dates=True)
+    bmus = pd.read_csv(snakemake.input['bmus'], index_col=0)
+
+    # Clean BMU data
+    bmus = bmus.loc[bmus['lat'] != 'distributed']
+    bmus['lat'] = bmus['lat'].astype(float)
+
+    # Reduce bids to total volume per unit
+    bids = bids.loc[idx[:, 'vol'], :].sum()
+    bids.index = bids.index.get_level_values(0)
+
+    # Select BMUs likely to curtail
+    renewable_bmus = bmus[bmus.carrier.isin(['onwind', 'offwind', 'hydro', 'cascade'])].index
+    thermal_bmus = bmus[(bmus.carrier.isin(['fossil', 'biomass', 'coal'])) & (bmus['lat'] > 55.3)].index
+    bid_counting_units = renewable_bmus.union(thermal_bmus)
+
+    # Calculate total daily bidding volume
+    total_balancing_volume = bids.loc[bids.index.intersection(bid_counting_units)].sum()
+
+    logger.info(f"Total balancing volume from submitted bids: {total_balancing_volume:.2f} MWh\n")
     
     # Calculate per-constraint distribution
-    constraint_balancing, detailed_df = calculate_per_constraint_balancing_volume(
-        n_wholesale,
+    constraint_balancing, detailed_df, total_flow = calculate_per_constraint_balancing_volume(
         n_redispatch,
         boundaries,
         total_balancing_volume,
     )
     
     # Save results
-    constraint_balancing.to_csv(snakemake.output['per_constraint_balancing'])
+    constraint_order = ['SSE-SP', 'SCOTEX', 'SSHARN', 'FLOWSTH', 'SEIMP']
+    ordered_balancing = constraint_balancing[constraint_order]
+    
+    output_series = pd.Series({
+        'total_balancing_volume': total_balancing_volume,
+        'total_constraint_flow_change_mwh': total_flow,
+    })
+    output_series = pd.concat([output_series, ordered_balancing])
+    output_series.to_csv(snakemake.output['per_constraint_balancing'], header=False)
     logger.info(f"Per-constraint balancing volumes saved to {snakemake.output['per_constraint_balancing']}")
     
-    detailed_df.to_csv(snakemake.output['detailed_breakdown'])
+    # Save detailed breakdown
+    detailed_df_reordered = detailed_df.reindex(constraint_order)
+    detailed_df_reordered = detailed_df_reordered.round(2)
+    detailed_df_reordered.to_csv(snakemake.output['detailed_breakdown'])
     logger.info(f"Detailed breakdown saved to {snakemake.output['detailed_breakdown']}")
     
     logger.info("\nPer-constraint balancing volume distribution complete!")
