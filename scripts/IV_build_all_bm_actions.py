@@ -8,6 +8,7 @@ import requests
 import pandas as pd
 from io import StringIO
 from tqdm import tqdm
+from _elexon_helpers import robust_request
 
 from _helpers import to_datetime, configure_logging
 from _constants import build_sp_register
@@ -23,7 +24,7 @@ trades_url = (
 
 
 def get_all_submitted_trades(date, period):
-    response = requests.get(trades_url.format(date, period))
+    response = robust_request(requests.get, trades_url.format(date, period), wait_time=2)
     response.raise_for_status()
     return pd.read_csv(StringIO(response.text))
 

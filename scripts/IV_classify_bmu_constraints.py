@@ -28,56 +28,6 @@ import pypsa
 from _helpers import configure_logging
 
 
-def get_constraint_line_endpoints(network, constraint_line_ids):
-    """
-    Get the geographic coordinates of all endpoints of constraint lines.
-    
-    Parameters:
-    -----------
-    network : pypsa.Network
-        Network object containing link (transmission line) data
-    constraint_line_ids : List[str]
-        Line IDs forming the constraint
-    
-    Returns:
-    --------
-    List[Tuple[float, float]]
-        List of (lon, lat) pairs for all endpoints
-    List[str]
-        List of bus IDs corresponding to those endpoints
-    """
-    coordinates = []
-    bus_ids = []
-    
-    for line_id in constraint_line_ids:
-        if line_id not in network.links.index:
-            logger.warning(f"Line {line_id} not found in network")
-            continue
-        
-        # Get the two buses that form this line
-        bus0 = network.links.loc[line_id, 'bus0']
-        bus1 = network.links.loc[line_id, 'bus1']
-        
-        # Get their coordinates
-        if bus0 in network.buses.index:
-            lon0 = network.buses.loc[bus0, 'x']
-            lat0 = network.buses.loc[bus0, 'y']
-            coordinates.append((lon0, lat0))
-            bus_ids.append(bus0)
-        else:
-            logger.warning(f"Bus {bus0} not found in network")
-        
-        if bus1 in network.buses.index:
-            lon1 = network.buses.loc[bus1, 'x']
-            lat1 = network.buses.loc[bus1, 'y']
-            coordinates.append((lon1, lat1))
-            bus_ids.append(bus1)
-        else:
-            logger.warning(f"Bus {bus1} not found in network")
-    
-    return coordinates, bus_ids
-
-
 def get_northernmost_points(constraint_line_ids, network):
     """
     For each constraint line, find its northernmost endpoint.
@@ -214,9 +164,9 @@ def classify_bmu_relative_to_constraint(lon, lat, boundary_params):
 if __name__ == '__main__':
     configure_logging(snakemake)
     
-    logger.info("Classifying BMUs relative to transmission constraints")
-    
+
     # Load the network (use the nodal network which has all buses and links)
+    logger.info("Classifying BMUs relative to transmission constraints")
     network = pypsa.Network(snakemake.input.network)
     logger.info(f"Loaded network with {len(network.buses)} buses and {len(network.links)} links")
     
@@ -229,7 +179,9 @@ if __name__ == '__main__':
     bmus = pd.read_csv(snakemake.input.bmus, index_col=0)
     logger.info(f"Loaded {len(bmus)} BMUs with coordinates")
     
-    # Filter BMUs to only those with valid coordinates
+
+    
+    # Filter BMUs to only those with valid coordinates, so not the one which are 'distributed' (which means they don't have a specific location and can't be classified as north/south)
     bmus_valid = bmus[(bmus['lat'] != 'distributed') & (bmus['lon'] != 'distributed')].copy()
     bmus_valid['lat'] = pd.to_numeric(bmus_valid['lat'], errors='coerce')
     bmus_valid['lon'] = pd.to_numeric(bmus_valid['lon'], errors='coerce')
@@ -273,12 +225,6 @@ if __name__ == '__main__':
             axis=1
         )
         
-        # Log distribution
-        north_count = (bmus_valid[f'{constraint_name}_side'] == 'north').sum()
-        south_count = (bmus_valid[f'{constraint_name}_side'] == 'south').sum()
-        logger.info(f"Classification for {constraint_name}:")
-        logger.info(f"  North: {north_count} BMUs")
-        logger.info(f"  South: {south_count} BMUs")
     
     # Reorder columns: north to south (SSE-SP, SCOTEX, SSHARN, FLOWSTH, SEIMP)
     constraint_order = ['SSE-SP', 'SCOTEX', 'SSHARN', 'FLOWSTH', 'SEIMP']

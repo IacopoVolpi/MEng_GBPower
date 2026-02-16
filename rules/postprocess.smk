@@ -99,25 +99,6 @@ rule summarize_frontend_data:
     script:
         "../scripts/summarize_frontend_data.py"
 
-
-rule IV_clear_balancing_market:
-    input:
-        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
-        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
-        submitted_offers="data/base/{day}/submitted_offers.csv",
-        submitted_bids="data/base/{day}/submitted_bids.csv",
-    output:
-        clearing_results="results/{day}/Balancing_Market_clearing_results_{ic}.csv",
-        accepted_actions="results/{day}/Balancing_Market_accepted_actions_{ic}.csv",
-    log:
-        "../logs/clearing/{day}_{ic}.log"
-    resources:
-        mem_mb=2000,
-    conda:
-        "../envs/environment.yaml",
-    script:
-        "../scripts/clear_balancing_market.py"
-
 rule IV_distribute_balancing_volumes:
     input:
         network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
@@ -172,3 +153,19 @@ rule IV_2_distribute_balancing_volume:
         "../envs/environment.yaml"
     script:
         "../scripts/IV_2_distribute_balancing_volume.py"
+
+rule IV_clear_balancing_market:
+    input:
+        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
+        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
+        bmu_classification="data/prerun/bmu_constraint_classification.csv",
+        submitted_bids="data/base/{day}/submitted_bids.csv",
+        submitted_offers="data/base/{day}/submitted_offers.csv",
+    output:
+        settlement_summary="results/{day}/IV_clearing_settlement_summary_{ic}.csv",
+        accepted_actions="results/{day}/IV_clearing_accepted_actions_{ic}.csv",
+        uncleared_summary="results/{day}/IV_clearing_uncleared_summary_{ic}.csv",
+    resources:
+        mem_mb=2000,
+    script:
+        "../scripts/IV_clear_balancing_market.py"

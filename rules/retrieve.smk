@@ -33,7 +33,7 @@ rule build_base:
         "../scripts/build_base.py"
 
 
-rule IV_build_submitted_bids_offers:
+rule IV_build_all_bm_actions:
     output:
         submitted_bids="data/base/{day}/submitted_bids.csv",
         submitted_offers="data/base/{day}/submitted_offers.csv",
@@ -42,4 +42,5 @@ rule IV_build_submitted_bids_offers:
     resources:
         mem_mb=2000
     script:
-        "../scripts/build_all_bm_actions.py"
+        "../scripts/IV_build_all_bm_actions.py"
+
