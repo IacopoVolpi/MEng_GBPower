@@ -8,14 +8,6 @@ This script compares wholesale dispatch (before balancing) with redispatch
 (after balancing) to understand how much generation in each geographic zone
 had to flex up or down to relieve transmission constraints.
 
-Geographic zones are defined by the constraint boundaries from 
-IV_classify_bmu_constraints.py, creating 6 color-coded regions:
-- Red: North of SSE-SP
-- Orange: South of SSE-SP, North of SCOTEX
-- Green: South of SCOTEX, North of SSHARN
-- Blue: South of SSHARN, North of FLOWSTH
-- Purple: South of FLOWSTH, North of SEIMP
-- Yellow: South of all constraints
 """
 
 import logging
@@ -27,21 +19,7 @@ from _helpers import configure_logging
 
 
 def get_generator_type(gen_name, n_redispatch):
-    """
-    Get the carrier type for a generator.
-    
-    Parameters:
-    -----------
-    gen_name : str
-        Generator name
-    n_redispatch : pypsa.Network
-        Network with generator data
-    
-    Returns:
-    --------
-    str
-        Carrier type (e.g., 'wind', 'gas', 'battery', etc.)
-    """
+
     if gen_name in n_redispatch.generators.index:
         return n_redispatch.generators.loc[gen_name, 'carrier']
     elif gen_name in n_redispatch.storage_units.index:
@@ -51,25 +29,7 @@ def get_generator_type(gen_name, n_redispatch):
 
 
 def classify_generator_to_zone(gen_name, bmu_classification):
-    """
-    Classify a generator to its geographic zone (color).
-    
-    Uses the constraint boundaries from IV_classify_bmu_constraints.py
-    to determine which zone a generator belongs to.
-    
-    Parameters:
-    -----------
-    gen_name : str
-        Generator name (BMU ID)
-    bmu_classification : pd.DataFrame
-        DataFrame with columns like 'SSE-SP_side', 'SCOTEX_side', etc.
-    
-    Returns:
-    --------
-    str
-        Color zone: 'red', 'orange', 'green', 'blue', 'purple', or 'yellow'
-    """
-    
+   
     if gen_name not in bmu_classification.index:
         # Generator not in classification (likely not a BMU)
         return 'unknown'
@@ -93,29 +53,16 @@ def classify_generator_to_zone(gen_name, bmu_classification):
 
 
 def calculate_dispatch_changes(n_wholesale, n_redispatch, bmu_classification):
-    """
-    Calculate dispatch changes for each generator between wholesale and redispatch.
-    
-    Parameters:
-    -----------
-    n_wholesale : pypsa.Network
-        Network with wholesale market dispatch (before balancing)
-    n_redispatch : pypsa.Network
-        Network with redispatch (after balancing)
-    bmu_classification : pd.DataFrame
-        BMU classification with constraint boundaries
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Columns: generator, type, zone, dispatch_change_mwh, direction
-    """
     
     # Get dispatch time series
     wholesale_dispatch = n_wholesale.generators_t.p
     redispatch_dispatch = n_redispatch.generators_t.p
     
     changes = []
+    zone_volumes_list = []
+    
+    # Aggregate per-timestamp per-zone volumes
+    zone_volumes_dict = {}
     
     for gen_name in wholesale_dispatch.columns:
         
@@ -123,22 +70,39 @@ def calculate_dispatch_changes(n_wholesale, n_redispatch, bmu_classification):
         if gen_name not in redispatch_dispatch.columns:
             continue
         
-        # Calculate change: redispatch - wholesale
-        # Sum across all timesteps and convert to MWh (multiply by 0.5 for 30-min data)
-        wholesale_sum = wholesale_dispatch[gen_name].sum() * 0.5
-        redispatch_sum = redispatch_dispatch[gen_name].sum() * 0.5
-        change = redispatch_sum - wholesale_sum
-        
-        # Get generator type
+        # Get generator metadata once
         gen_type = get_generator_type(gen_name, n_redispatch)
-        
-        # Classify to zone
         zone = classify_generator_to_zone(gen_name, bmu_classification)
         
-        # Determine direction
-        if change > 0:
+        # Calculate per-timestamp changes and aggregate by zone
+        for ts in wholesale_dispatch.index:
+            wholesale_val = wholesale_dispatch.loc[ts, gen_name] * 0.5
+            redispatch_val = redispatch_dispatch.loc[ts, gen_name] * 0.5
+            change = redispatch_val - wholesale_val
+            
+            # Skip unknown zone generators
+            if zone == 'unknown':
+                continue
+            
+            # Accumulate zone volumes
+            key = (ts, zone)
+            if key not in zone_volumes_dict:
+                zone_volumes_dict[key] = {'flex_up': 0.0, 'flex_down': 0.0}
+            
+            if change > 0:
+                zone_volumes_dict[key]['flex_up'] += change
+            else:
+                zone_volumes_dict[key]['flex_down'] += abs(change)
+        
+        # Calculate total change across all timestamps
+        wholesale_sum = wholesale_dispatch[gen_name].sum() * 0.5
+        redispatch_sum = redispatch_dispatch[gen_name].sum() * 0.5
+        total_change = redispatch_sum - wholesale_sum
+        
+        # Determine direction based on total change
+        if total_change > 0:
             direction = 'up'
-        elif change < 0:
+        elif total_change < 0:
             direction = 'down'
         else:
             direction = 'none'
@@ -147,29 +111,23 @@ def calculate_dispatch_changes(n_wholesale, n_redispatch, bmu_classification):
             'generator': gen_name,
             'type': gen_type,
             'zone': zone,
-            'dispatch_change_mwh': change,
+            'dispatch_change_mwh': total_change,
             'direction': direction,
         })
     
-    return pd.DataFrame(changes)
-
-
-def sort_generators_by_zone_and_type(dispatch_changes_df):
-    """
-    Sort generators first by zone (north to south), then by type (alphabetically).
+    # Convert zone volumes dict to DataFrame
+    for (ts, zone), vols in zone_volumes_dict.items():
+        zone_volumes_list.append({
+            'timestamp': ts,
+            'zone': zone,
+            'flex_up_mwh': vols['flex_up'],
+            'flex_down_mwh': vols['flex_down'],
+        })
     
-    Parameters:
-    -----------
-    dispatch_changes_df : pd.DataFrame
-        Output from calculate_dispatch_changes()
+    # Create dispatch changes DataFrame
+    changes_df = pd.DataFrame(changes)
     
-    Returns:
-    --------
-    pd.DataFrame
-        Sorted by zone then type
-    """
-    
-    # Define zone order (north to south)
+    # Sort by zone (north to south), then by type, then by generator name
     zone_order = {
         'red': 0,
         'orange': 1,
@@ -179,32 +137,17 @@ def sort_generators_by_zone_and_type(dispatch_changes_df):
         'yellow': 5,
         'unknown': 6,
     }
+    changes_df['zone_order'] = changes_df['zone'].map(zone_order)
+    changes_df = changes_df.sort_values(['zone_order', 'type', 'generator'])
+    changes_df = changes_df.drop('zone_order', axis=1)
     
-    # Create a copy and add sort keys
-    df = dispatch_changes_df.copy()
-    df['zone_order'] = df['zone'].map(zone_order)
+    # Create zone volumes DataFrame
+    zone_volumes_df = pd.DataFrame(zone_volumes_list)
     
-    # Sort by zone order, then by type, then by generator name
-    df = df.sort_values(['zone_order', 'type', 'generator'])
-    df = df.drop('zone_order', axis=1)
-    
-    return df.reset_index(drop=True)
+    return changes_df.reset_index(drop=True), zone_volumes_df
 
 
 def aggregate_by_zone(dispatch_changes_df):
-    """
-    Aggregate dispatch changes by geographic zone.
-    
-    Parameters:
-    -----------
-    dispatch_changes_df : pd.DataFrame
-        Output from calculate_dispatch_changes()
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Aggregated by zone with totals and statistics
-    """
     
     # Group by zone
     grouped = dispatch_changes_df.groupby('zone')
@@ -241,19 +184,6 @@ def aggregate_by_zone(dispatch_changes_df):
 
 
 def aggregate_by_zone_and_type(dispatch_changes_df):
-    """
-    Aggregate dispatch changes by zone AND type (e.g., "red winds", "orange fossils").
-    
-    Parameters:
-    -----------
-    dispatch_changes_df : pd.DataFrame
-        Output from calculate_dispatch_changes()
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Grouped by zone and type with counts and dispatch changes
-    """
     
     # Group by zone and type
     grouped = dispatch_changes_df.groupby(['zone', 'type'])
@@ -317,61 +247,33 @@ if __name__ == '__main__':
         snakemake.input['bmu_classification'],
         index_col=0
     )
-    logger.info(f"Loaded {len(bmu_classification)} BMUs with constraint classification")
     
-    logger.info("\nCalculating dispatch changes...")
-    dispatch_changes = calculate_dispatch_changes(
+    # Calculate dispatch changes and zone volumes in one pass
+    logger.info("Calculating dispatch changes and zone volumes...")
+    dispatch_changes, zone_volumes = calculate_dispatch_changes(
         n_wholesale,
         n_redispatch,
         bmu_classification
     )
-    logger.info(f"Calculated dispatch changes for {len(dispatch_changes)} generators")
+    logger.info(f"Processed {len(dispatch_changes)} generators")
+    logger.info(f"Generated {len(zone_volumes)} zone-timestamp combinations")
     
-    logger.info("\nSorting by zone and type...")
-    dispatch_changes_sorted = sort_generators_by_zone_and_type(dispatch_changes)
-    
-    logger.info("\nAggregating by zone...")
+    # Use dispatch_changes for aggregations
     aggregated_by_zone = aggregate_by_zone(dispatch_changes)
-    
-    logger.info("Aggregating by zone and type...")
     aggregated_by_zone_and_type = aggregate_by_zone_and_type(dispatch_changes)
     
-    # Log results
-    logger.info("\n" + "="*80)
-    logger.info("DISPATCH CHANGES BY GEOGRAPHIC ZONE")
-    logger.info("="*80)
-    
-    for zone, row in aggregated_by_zone.iterrows():
-        logger.info(f"\n{row['zone_name']} ({zone}):")
-        logger.info(f"  Generators: {int(row['count_generators'])}")
-        logger.info(f"  Total change: {row['total_change_mwh']:10.2f} MWh (signed)")
-        logger.info(f"  Flex up: {row['flex_up_mwh']:10.2f} MWh")
-        logger.info(f"  Flex down: {row['flex_down_mwh']:10.2f} MWh")
-        logger.info(f"  Avg per generator: {row['avg_change_per_generator']:10.2f} MWh")
-    
-    logger.info("\n" + "="*80)
-    logger.info("DISPATCH CHANGES BY ZONE AND TYPE")
-    logger.info("="*80)
-    
-    for idx, row in aggregated_by_zone_and_type.iterrows():
-        logger.info(f"{row['zone_name']:25s} | {row['type']:15s} | {int(row['generator_count']):3d} units | {row['dispatch_change_mwh']:10.2f} MWh ({row['direction']})")
-    
-    logger.info("\n" + "="*80)
-    logger.info(f"Total generators analyzed: {len(dispatch_changes)}")
-    logger.info(f"Total net change: {dispatch_changes['dispatch_change_mwh'].sum():10.2f} MWh")
-    logger.info("="*80 + "\n")
-    
-    # Save aggregated by zone results
+    # Save zone volumes per timestamp (for market clearing)
+    zone_volumes_output = zone_volumes.round(2)
+    zone_volumes_output.to_csv(snakemake.output['zone_volumes_per_timestamp'], index=False)
+    logger.info(f"Zone volumes per timestamp saved to {snakemake.output['zone_volumes_per_timestamp']}")
+
+    # Save aggregated by zone
     aggregated_by_zone_output = aggregated_by_zone[['count_generators', 'total_change_mwh', 'avg_change_per_generator', 'flex_up_mwh', 'flex_down_mwh', 'zone_name']].round(2)
     aggregated_by_zone_output.to_csv(snakemake.output['aggregated_by_zone'])
     logger.info(f"Aggregated by zone results saved to {snakemake.output['aggregated_by_zone']}")
     
-    # Save detailed generator-level results
-    dispatch_changes_output = dispatch_changes_sorted.round(2)
-    dispatch_changes_output.to_csv(snakemake.output['detailed_by_generator'], index=False)
-    logger.info(f"Detailed generator results saved to {snakemake.output['detailed_by_generator']}")
-    
-    # Save aggregated by zone and type results
+
+    # Save aggregated by zone and type
     aggregated_by_zone_and_type_output = aggregated_by_zone_and_type.round(2)
     aggregated_by_zone_and_type_output.to_csv(snakemake.output['aggregated_by_zone_and_type'], index=False)
     logger.info(f"Aggregated by zone and type results saved to {snakemake.output['aggregated_by_zone_and_type']}")

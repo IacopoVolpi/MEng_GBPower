@@ -12,9 +12,6 @@ The classification is based on fitting a linear boundary through the northernmos
 points of each constraint's transmission lines, then determining which side of
 that boundary each BMU falls on.
 
-This is critical for realistic balancing market clearing: BMUs north of a 
-constraint can only usefully flex down (bid), while BMUs south can only 
-usefully flex up (offer).
 """
 
 import logging
@@ -29,21 +26,7 @@ from _helpers import configure_logging
 
 
 def get_northernmost_points(constraint_line_ids, network):
-    """
-    For each constraint line, find its northernmost endpoint.
     
-    Parameters:
-    -----------
-    constraint_line_ids : List[str]
-        Line IDs forming the constraint
-    network : pypsa.Network
-        Network object with bus coordinates
-    
-    Returns:
-    --------
-    List[Tuple[float, float]]
-        List of (lon, lat) for the northernmost point of each line
-    """
     northernmost_points = []
     
     for line_id in constraint_line_ids:
@@ -81,21 +64,8 @@ def get_northernmost_points(constraint_line_ids, network):
 def fit_constraint_boundary(northernmost_points):
     """
     Fit a linear boundary through the northernmost points of a constraint.
-    
     Uses least-squares linear regression to find: lat = m * lon + b
     
-    Parameters:
-    -----------
-    northernmost_points : List[Tuple[float, float]]
-        (lon, lat) pairs of northernmost points
-    
-    Returns:
-    --------
-    Dict with keys:
-        - 'slope': m in lat = m * lon + b
-        - 'intercept': b in lat = m * lon + b
-        - 'center_lon': Mean longitude of the boundary
-        - 'center_lat': Mean latitude of the boundary
     """
     if not northernmost_points:
         raise ValueError("No northernmost points provided for constraint")
@@ -125,27 +95,7 @@ def fit_constraint_boundary(northernmost_points):
 
 
 def classify_bmu_relative_to_constraint(lon, lat, boundary_params):
-    """
-    Classify a BMU as north or south of a constraint boundary.
-    
-    Given a boundary line: lat = slope * lon + intercept
-    - If BMU_lat > slope * BMU_lon + intercept: BMU is NORTH
-    - If BMU_lat < slope * BMU_lon + intercept: BMU is SOUTH
-    
-    Parameters:
-    -----------
-    lon : float
-        BMU longitude
-    lat : float
-        BMU latitude
-    boundary_params : Dict
-        Output from fit_constraint_boundary()
-    
-    Returns:
-    --------
-    str
-        'north' or 'south'
-    """
+
     lon = float(lon)
     lat = float(lat)
     
@@ -230,13 +180,10 @@ if __name__ == '__main__':
     constraint_order = ['SSE-SP', 'SCOTEX', 'SSHARN', 'FLOWSTH', 'SEIMP']
     side_columns = [col for col in bmus_valid.columns if col.endswith('_side')]
     other_columns = [col for col in bmus_valid.columns if not col.endswith('_side')]
-    
     # Order the side columns by constraint order
-    ordered_side_columns = [f'{constraint}_side' for constraint in constraint_order if f'{constraint}_side' in side_columns]
-    
+    ordered_side_columns = [f'{constraint}_side' for constraint in constraint_order if f'{constraint}_side' in side_columns]  
     # Reorder the dataframe
     bmus_valid = bmus_valid[other_columns + ordered_side_columns]
-    
     # Save BMU classification to CSV
     bmus_valid.to_csv(snakemake.output.bmu_constraint_classification)
     logger.info(f"\nBMU classification saved to {snakemake.output.bmu_constraint_classification}")

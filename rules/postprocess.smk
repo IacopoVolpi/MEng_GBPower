@@ -99,52 +99,15 @@ rule summarize_frontend_data:
     script:
         "../scripts/summarize_frontend_data.py"
 
-rule IV_distribute_balancing_volumes:
-    input:
-        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
-        transmission_boundaries="data/transmission_boundaries.yaml",
-        boundary_flow_constraints="data/base/{day}/boundary_flow_constraints.csv",
-        bids="data/base/{day}/bids.csv",
-        bmus="data/prerun/prepared_bmus.csv",
-    output:
-        per_constraint_balancing="results/{day}/IV_balancing_volume_per_constraint_{ic}.csv",
-        detailed_breakdown="results/{day}/IV_per_constraint_balancing_breakdown_{ic}.csv",
-    log:
-        "../logs/distribute_balancing/{day}_{ic}.log"
-    resources:
-        mem_mb=2000,
-    conda:
-        "../envs/environment.yaml"
-    script:
-        "../scripts/IV_distribute_balancing_volumes.py"
-
-rule IV_alternative_distribute_balancing_volumes:
-    input:
-        network_nodal="results/{day}/network_{ic}_s_nodal_solved.nc",
-        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
-        transmission_boundaries="data/transmission_boundaries.yaml",
-    output:
-        per_constraint_balancing="results/{day}/IV_alternative_balancing_volume_per_constraint_{ic}.csv",
-        detailed_breakdown="results/{day}/IV_alternative_per_constraint_breakdown_{ic}.csv",
-    log:
-        "../logs/wholesale_flows/{day}_{ic}.log"
-    resources:
-        mem_mb=1000,
-    conda:
-        "../envs/environment.yaml"
-    script:
-        "../scripts/IV_alternative_distribute_balancing_volumes.py"
-
-
-rule IV_2_distribute_balancing_volume:
+rule IV_distribute_balancing_volume:
     input:
         network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
         network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
         bmu_classification="data/prerun/bmu_constraint_classification.csv",
     output:
-        aggregated_by_zone="results/{day}/IV_2_dispatch_changes_by_zone_{ic}.csv",
-        detailed_by_generator="results/{day}/IV_2_dispatch_changes_by_generator_{ic}.csv",
-        aggregated_by_zone_and_type="results/{day}/IV_2_dispatch_changes_by_zone_and_type_{ic}.csv",
+        zone_volumes_per_timestamp="results/{day}/IV_dispatch_changes_by_zone_and_SP_{ic}.csv",
+        aggregated_by_zone="results/{day}/IV_dispatch_changes_by_zone_{ic}.csv",
+        aggregated_by_zone_and_type="results/{day}/IV_dispatch_changes_by_zone_and_type_{ic}.csv",
     log:
         "../logs/dispatch_changes/{day}_{ic}.log"
     resources:
@@ -152,13 +115,12 @@ rule IV_2_distribute_balancing_volume:
     conda:
         "../envs/environment.yaml"
     script:
-        "../scripts/IV_2_distribute_balancing_volume.py"
+        "../scripts/IV_distribute_balancing_volume.py"
 
 rule IV_clear_balancing_market:
     input:
-        network_wholesale="results/{day}/network_{ic}_s_national_solved.nc",
-        network_redispatch="results/{day}/network_{ic}_s_national_solved_redispatch.nc",
         bmu_classification="data/prerun/bmu_constraint_classification.csv",
+        zone_volumes="results/{day}/IV_dispatch_changes_by_zone_and_SP_{ic}.csv",
         submitted_bids="data/base/{day}/submitted_bids.csv",
         submitted_offers="data/base/{day}/submitted_offers.csv",
     output:
