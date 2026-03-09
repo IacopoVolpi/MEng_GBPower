@@ -22,6 +22,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+import time
 import urllib
 import requests
 import numpy as np

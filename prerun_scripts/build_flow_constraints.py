@@ -77,7 +77,7 @@ def get_boundary_flow_day(date_range):
     params = {'sql': sql_query}
 
     response = requests.get(
-        'https://api.nationalgrideso.com/api/3/action/datastore_search_sql',
+        'https://api.neso.energy/api/3/action/datastore_search_sql',
         params=parse.urlencode(params)
         )
 

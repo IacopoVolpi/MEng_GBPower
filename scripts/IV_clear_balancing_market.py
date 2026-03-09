@@ -84,7 +84,7 @@ def annotate_bids_offers(bids_df, offers_df, unit_lookup):
     --------
     tuple of (bids_df, offers_df) with added columns [zone, carrier_type]
     """
-    
+    #create a copy to avoid modifying original DataFrames
     bids = bids_df.copy()
     offers = offers_df.copy()
     
@@ -253,8 +253,7 @@ def run_balancing_market_clearing(zone_volumes, bids_df, offers_df, unit_lookup)
     timestamps = zone_volumes.index.get_level_values('timestamp').unique()
     
     for i, ts in enumerate(timestamps):
-        logger.debug(f"Clearing settlement period {ts}")
-        
+       
         # Create mutable copies for this timestamp
         available_bids = bids_df[bids_df['timestamp'] == ts].copy()
         available_offers = offers_df[offers_df['timestamp'] == ts].copy()
@@ -272,19 +271,13 @@ def run_balancing_market_clearing(zone_volumes, bids_df, offers_df, unit_lookup)
                 flex_up_required = 0.0
                 flex_down_required = 0.0
             
-            # Determine which direction balancing is needed
+            # Process DOWNWARD balancing (accept bids)
             if flex_down_required > 0.1:
-                # Need to reduce output: accept bids
-                direction = 'down'
-                required_volume = flex_down_required
-                
-                # Filter bids to this zone only
                 zone_bids = available_bids[available_bids['zone'] == zone]
-                
-                result = clear_zone_downward(required_volume, zone_bids, zone, ts)
+                result_down = clear_zone_downward(flex_down_required, zone_bids, zone, ts)
                 
                 # Remove accepted bids from available pool
-                for action in result['accepted_actions']:
+                for action in result_down['accepted_actions']:
                     matched = available_bids[
                         (available_bids['unit_id'] == action['unit_id']) &
                         (available_bids['pair_id'] == action['pair_id']) &
@@ -293,18 +286,40 @@ def run_balancing_market_clearing(zone_volumes, bids_df, offers_df, unit_lookup)
                     if not matched.empty:
                         available_bids = available_bids.drop(matched.index)
                 
-            elif flex_up_required > 0.1:
-                # Need to increase output: accept offers
-                direction = 'up'
-                required_volume = flex_up_required
+                # Record settlement result for downward
+                settlement_results.append({
+                    'timestamp': ts,
+                    'zone': zone,
+                    'zone_name': zone_names.get(zone, 'Unknown'),
+                    'direction': 'down',
+                    'required_volume_mwh': flex_down_required,
+                    'cleared_volume_mwh': result_down['cleared_volume'],
+                    'uncleared_volume_mwh': result_down['uncleared_volume'],
+                    'total_cost_gbp': result_down['total_cost'],
+                    'uncleared_flag': 'YES' if result_down['uncleared_volume'] > 0.1 else 'NO',
+                })
+                all_accepted_actions.extend(result_down['accepted_actions'])
                 
-                # Filter offers to this zone only
+                if result_down['uncleared_volume'] > 0.1:
+                    uncleared_summary.append({
+                        'timestamp': ts,
+                        'zone': zone,
+                        'zone_name': zone_names.get(zone, 'Unknown'),
+                        'direction': 'down',
+                        'uncleared_volume_mwh': result_down['uncleared_volume'],
+                    })
+                    logger.warning(
+                        f"UNCLEARED: {ts} | {zone} | down | "
+                        f"{result_down['uncleared_volume']:.2f} MWh"
+                    )
+            
+            # Process UPWARD balancing (accept offers) - INDEPENDENT of downward
+            if flex_up_required > 0.1:
                 zone_offers = available_offers[available_offers['zone'] == zone]
-                
-                result = clear_zone_upward(required_volume, zone_offers, zone, ts)
+                result_up = clear_zone_upward(flex_up_required, zone_offers, zone, ts)
                 
                 # Remove accepted offers from available pool
-                for action in result['accepted_actions']:
+                for action in result_up['accepted_actions']:
                     matched = available_offers[
                         (available_offers['unit_id'] == action['unit_id']) &
                         (available_offers['pair_id'] == action['pair_id']) &
@@ -312,47 +327,47 @@ def run_balancing_market_clearing(zone_volumes, bids_df, offers_df, unit_lookup)
                     ]
                     if not matched.empty:
                         available_offers = available_offers.drop(matched.index)
-            
-            else:
-                # No balancing required for this zone
-                direction = 'none'
-                required_volume = 0.0
-                result = {
-                    'cleared_volume': 0.0,
-                    'uncleared_volume': 0.0,
-                    'total_cost': 0.0,
-                    'accepted_actions': [],
-                }
-            
-            # Log settlement result for this zone
-            settlement_results.append({
-                'timestamp': ts,
-                'zone': zone,
-                'zone_name': zone_names.get(zone, 'Unknown'),
-                'direction': direction,
-                'required_volume_mwh': required_volume,
-                'cleared_volume_mwh': result['cleared_volume'],
-                'uncleared_volume_mwh': result['uncleared_volume'],
-                'total_cost_gbp': result['total_cost'],
-                'uncleared_flag': 'YES' if result['uncleared_volume'] > 0.1 else 'NO',
-            })
-            
-            # Collect accepted actions
-            all_accepted_actions.extend(result['accepted_actions'])
-            
-            # Flag uncleared volumes
-            if result['uncleared_volume'] > 0.1:
-                uncleared_summary.append({
+                
+                # Record settlement result for upward
+                settlement_results.append({
                     'timestamp': ts,
                     'zone': zone,
                     'zone_name': zone_names.get(zone, 'Unknown'),
-                    'direction': direction,
-                    'uncleared_volume_mwh': result['uncleared_volume'],
+                    'direction': 'up',
+                    'required_volume_mwh': flex_up_required,
+                    'cleared_volume_mwh': result_up['cleared_volume'],
+                    'uncleared_volume_mwh': result_up['uncleared_volume'],
+                    'total_cost_gbp': result_up['total_cost'],
+                    'uncleared_flag': 'YES' if result_up['uncleared_volume'] > 0.1 else 'NO',
                 })
-                logger.warning(
-                    f"UNCLEARED: {ts} | {zone} | {direction} | "
-                    f"{result['uncleared_volume']:.2f} MWh"
-                )
+                all_accepted_actions.extend(result_up['accepted_actions'])
+                
+                if result_up['uncleared_volume'] > 0.1:
+                    uncleared_summary.append({
+                        'timestamp': ts,
+                        'zone': zone,
+                        'zone_name': zone_names.get(zone, 'Unknown'),
+                        'direction': 'up',
+                        'uncleared_volume_mwh': result_up['uncleared_volume'],
+                    })
+                    logger.warning(
+                        f"UNCLEARED: {ts} | {zone} | up | "
+                        f"{result_up['uncleared_volume']:.2f} MWh"
+                    )
+            
+            # If neither direction needed, record a no-action result
+            if flex_up_required <= 0.1 and flex_down_required <= 0.1:
+                settlement_results.append({
+                    'timestamp': ts,
+                    'zone': zone,
+                    'zone_name': zone_names.get(zone, 'Unknown'),
+                    'direction': 'none',
+                    'required_volume_mwh': 0.0,
+                    'cleared_volume_mwh': 0.0,
+                    'uncleared_volume_mwh': 0.0,
+                    'total_cost_gbp': 0.0,
+                    'uncleared_flag': 'NO',
+                })
     
     return (
         pd.DataFrame(settlement_results),
@@ -401,31 +416,43 @@ if __name__ == '__main__':
     logger.info(f"Loaded {len(bids_df)} bids, {len(offers_df)} offers")
     
     logger.info("\nStep 2.5: Converting bid volumes to absolute values and filtering...")
-    # CRITICAL FIX: Bids have negative volumes in the data. Convert to absolute values.
+
+    # Convert bid volumes to absolute values (they're stored as negative)
     bids_df['volume_mw'] = bids_df['volume_mw'].abs()
     logger.info("Converted bid volumes to absolute values (bids were stored as negative)")
+
+    # Filter bids and offers to only include BMUs that are in the classification file
+    initial_bid_count = len(bids_df)
+    initial_offer_count = len(offers_df)
+    initial_bid_bmus = bids_df['unit_id'].nunique()
+    initial_offer_bmus = offers_df['unit_id'].nunique()
+
+    bids_filtered = bids_df[bids_df['unit_id'].isin(bmu_classification.index)]
+    offers_filtered = offers_df[offers_df['unit_id'].isin(bmu_classification.index)]
+
+    final_bid_count = len(bids_filtered)
+    final_offer_count = len(offers_filtered)
+    final_bid_bmus = bids_filtered['unit_id'].nunique()
+    final_offer_bmus = offers_filtered['unit_id'].nunique()
+
+    removed_bids = initial_bid_count - final_bid_count
+    removed_offers = initial_offer_count - final_offer_count
+    removed_bid_bmus = initial_bid_bmus - final_bid_bmus
+    removed_offer_bmus = initial_offer_bmus - final_offer_bmus
+
+    logger.info(f"Filtered bids: {initial_bid_count} --> {final_bid_count} ({final_bid_count/initial_bid_count*100:.1f}% retained)")
+    logger.info(f"Filtered offers: {initial_offer_count} --> {final_offer_count} ({final_offer_count/initial_offer_count*100:.1f}% retained)")
+    logger.info(f"Removed {removed_bids} bids and {removed_offers} offers from BMUs not in classification file (no geographic coordinates)")
+    logger.info(f"Removed bids from {removed_bid_bmus}/{initial_bid_bmus} unique BMUs ({removed_bid_bmus/initial_bid_bmus*100:.1f}% of BMUs with bids)")
+    logger.info(f"Removed offers from {removed_offer_bmus}/{initial_offer_bmus} unique BMUs ({removed_offer_bmus/initial_offer_bmus*100:.1f}% of BMUs with offers)")
+
+    bids_df = bids_filtered
+    offers_df = offers_filtered
+    logger.info("")
     
     # Convert volume_mw to float64 to avoid dtype warnings during clearing
     bids_df['volume_mw'] = bids_df['volume_mw'].astype('float64')
     offers_df['volume_mw'] = offers_df['volume_mw'].astype('float64')
-
-    # Filter bids and offers to only BMUs in the classification file
-    # (these are the BMUs we have geographic coordinates for)
-    classified_bmus = set(bmu_classification.index)
-    
-    bids_before = len(bids_df)
-    offers_before = len(offers_df)
-    
-    bids_df = bids_df[bids_df['unit_id'].isin(classified_bmus)].copy()
-    offers_df = offers_df[offers_df['unit_id'].isin(classified_bmus)].copy()
-    
-    logger.info(f"Filtered bids: {bids_before} --> {len(bids_df)} ({len(bids_df)/bids_before*100:.1f}% retained)")
-    logger.info(f"Filtered offers: {offers_before} --> {len(offers_df)} ({len(offers_df)/offers_before*100:.1f}% retained)")
-    
-    removed_bids = bids_before - len(bids_df)
-    removed_offers = offers_before - len(offers_df)
-    if removed_bids > 0 or removed_offers > 0:
-        logger.info(f"Removed {removed_bids} bids and {removed_offers} offers from BMUs not in classification file (no geographic coordinates)")
 
     logger.info("\nStep 3: Creating unit lookup tables...")
     unit_lookup = create_unit_lookup(bmu_classification)
@@ -443,6 +470,38 @@ if __name__ == '__main__':
     logger.info(f"Bids per zone:\n{bids_df['zone'].value_counts()}")
     logger.info(f"Offers per zone:\n{offers_df['zone'].value_counts()}")
     
+    # ##########################################################################################################
+    # #########################################################################################################
+    # #Logging to visualise the distribution of bid and offer prices and volumes before clearing
+    # # Preview sorted bids and offers
+    # logger.info("\n" + "="*80)
+    # logger.info("PREVIEW: Top 20 bids sorted by price (descending - most expensive first)")
+    # logger.info("="*80)
+    # top_bids = bids_df.sort_values('price', ascending=False).head(200)
+    # logger.info(f"\n{top_bids[['timestamp', 'zone', 'unit_id', 'carrier_type', 'price', 'volume_mw']].to_string(index=False)}")
+    
+    # logger.info("\n" + "="*80)
+    # logger.info("PREVIEW: Bottom 20 bids sorted by price (ascending - cheapest first)")
+    # logger.info("="*80)
+    # bottom_bids = bids_df.sort_values('price', ascending=True).head(200)
+    # logger.info(f"\n{bottom_bids[['timestamp', 'zone', 'unit_id', 'carrier_type', 'price', 'volume_mw']].to_string(index=False)}")
+    
+    # logger.info("\n" + "="*80)
+    # logger.info("PREVIEW: Top 20 offers sorted by price (ascending - cheapest first)")
+    # logger.info("="*80)
+    # top_offers = offers_df.sort_values('price', ascending=True).head(200)
+    # logger.info(f"\n{top_offers[['timestamp', 'zone', 'unit_id', 'carrier_type', 'price', 'volume_mw']].to_string(index=False)}")
+    
+    # logger.info("\n" + "="*80)
+    # logger.info("PREVIEW: Bottom 20 offers sorted by price (descending - most expensive first)")
+    # logger.info("="*80)
+    # bottom_offers = offers_df.sort_values('price', ascending=False).head(200)
+    # logger.info(f"\n{bottom_offers[['timestamp', 'zone', 'unit_id', 'carrier_type', 'price', 'volume_mw']].to_string(index=False)}")
+    
+
+###########################################################################################################
+#############################################################################################################
+
     logger.info("\nStep 5: Running balancing market clearing (red > orange > green > blue > purple > yellow)...")
     settlement_summary, accepted_actions, uncleared_summary = run_balancing_market_clearing(
         zone_volumes, bids_df, offers_df, unit_lookup
@@ -458,7 +517,11 @@ if __name__ == '__main__':
     settlement_summary.to_csv(snakemake.output['settlement_summary'], index=False)
     logger.info(f"Settlement summary saved: {snakemake.output['settlement_summary']}")
     
-    # Save accepted actions
+    # Save accepted actions (reorder columns, drop pair_id)
+    if not accepted_actions.empty:
+        accepted_actions = accepted_actions[['timestamp', 'zone', 'unit_id', 'carrier_type', 'action_type', 'price_per_mwh', 'cost_gbp', 'volume_mwh']]
+        accepted_actions['cost_gbp'] = accepted_actions['cost_gbp'].round(2)
+        accepted_actions['volume_mwh'] = accepted_actions['volume_mwh'].round(2)
     accepted_actions.to_csv(snakemake.output['accepted_actions'], index=False)
     logger.info(f"Accepted actions saved: {snakemake.output['accepted_actions']}")
     
