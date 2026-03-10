@@ -10,7 +10,7 @@ logs/
 gurobi.log
 .github/scripts/__pycache__/
 
-*.ipynb
+
 *.parquet
 
 runscript.py

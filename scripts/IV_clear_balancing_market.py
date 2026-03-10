@@ -186,7 +186,12 @@ def clear_zone_downward(required_volume, available_bids, zone, settlement_timest
         if accept_volume <= 0:
             continue
         
-        action_cost = row['price'] * accept_volume * 0.5
+        # Negate price: submitted_bids.csv uses ELEXON BOD convention
+        # (negative = SO pays generator, positive = generator pays SO)
+        # We convert to SO cashflow convention (positive = cost to SO)
+        # to match the sign convention used in bids.csv
+        so_price = -row['price']
+        action_cost = so_price * accept_volume * 0.5
         
         accepted_actions.append({
             'timestamp': settlement_timestamp,
@@ -196,7 +201,7 @@ def clear_zone_downward(required_volume, available_bids, zone, settlement_timest
             'pair_id': row['pair_id'],
             'action_type': 'bid',
             'volume_mwh': accept_volume,
-            'price_per_mwh': row['price'],
+            'price_per_mwh': so_price,
             'cost_gbp': action_cost,
         })
         
@@ -449,6 +454,20 @@ if __name__ == '__main__':
     bids_df = bids_filtered
     offers_df = offers_filtered
     logger.info("")
+    
+    logger.info("\nStep 2.6: Excluding known problematic BMUs...")
+    # These biomass units submit at £0/MWh and are never accepted by the real SO,
+    # yet they absorb huge clearing volume in the IV algorithm — remove them.
+    EXCLUDED_BMUS = ['DRAXX-5', 'DRAXX-6']
+    
+    n_bids_before = len(bids_df)
+    n_offers_before = len(offers_df)
+    bids_df = bids_df[~bids_df['unit_id'].isin(EXCLUDED_BMUS)]
+    offers_df = offers_df[~offers_df['unit_id'].isin(EXCLUDED_BMUS)]
+    n_bids_removed = n_bids_before - len(bids_df)
+    n_offers_removed = n_offers_before - len(offers_df)
+    logger.info(f"Excluded BMUs: {EXCLUDED_BMUS}")
+    logger.info(f"Removed {n_bids_removed} bids and {n_offers_removed} offers from excluded BMUs")
     
     # Convert volume_mw to float64 to avoid dtype warnings during clearing
     bids_df['volume_mw'] = bids_df['volume_mw'].astype('float64')
