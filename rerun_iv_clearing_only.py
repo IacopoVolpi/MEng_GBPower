@@ -84,6 +84,7 @@ for i, day in enumerate(days, 1):
     sub_bids_path = data_day / "submitted_bids.csv"
     sub_offers_path = data_day / "submitted_offers.csv"
 
+
     missing = [p for p in [zone_vol_path, sub_bids_path, sub_offers_path] if not p.exists()]
     if missing:
         log.warning(f"[{i}/{len(days)}]  {day}  SKIP — missing inputs: {[str(p.name) for p in missing]}")
@@ -130,12 +131,13 @@ for i, day in enumerate(days, 1):
         bids_df["volume_mw"] = bids_df["volume_mw"].astype("float64")
         offers_df["volume_mw"] = offers_df["volume_mw"].astype("float64")
 
-        # ── Step 4: Run clearing ────────────────────────────────────────
+      
+        # ── Step 5: Run clearing ────────────────────────────────────────
         settlement_summary, accepted_actions, uncleared_summary = run_balancing_market_clearing(
-            zone_volumes, bids_df, offers_df, unit_lookup
+            zone_volumes, bids_df, offers_df, unit_lookup,
         )
 
-        # ── Step 5: Save outputs ────────────────────────────────────────
+        # ── Step 6: Save outputs ────────────────────────────────────────
         settlement_summary.to_csv(day_dir / "IV_clearing_settlement_summary_flex.csv", index=False)
 
         if not accepted_actions.empty:
