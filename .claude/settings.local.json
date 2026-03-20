@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(/c/Users/thoma/anaconda3/python.exe:*)"
-    ]
-  }
-}
